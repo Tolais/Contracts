@@ -49,6 +49,17 @@ pub enum DataKey {
     TotalShares,
     TotalStaked,
     StakingContract,
+    PausedVault(u64),
+    PauseAuthority,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct PausedVault {
+    pub vault_id: u64,
+    pub pause_timestamp: u64,
+    pub pause_authority: Address,
+    pub reason: String,
     CollateralBridge,
     MetadataAnchor,
     NFTMinter,
@@ -321,6 +332,12 @@ impl VestingContract {
         if !vault.is_initialized {
             panic!("Vault not initialized");
         }
+
+        // Check if this specific vault schedule is paused
+        if Self::is_vault_paused(env.clone(), vault_id) {
+            panic!("Vault schedule paused");
+        }
+
         vault.owner.require_auth();
 
         let vested = Self::calculate_claimable(&env, vault_id, &vault);
@@ -392,6 +409,56 @@ impl VestingContract {
         let mut vault = Self::get_vault_internal(&env, vault_id);
         vault.is_frozen = freeze;
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
+
+    pub fn pause_specific_schedule(env: Env, vault_id: u64, reason: String) {
+        Self::require_pause_authority(&env);
+        let vault = Self::get_vault_internal(&env, vault_id);
+        if !vault.is_initialized {
+            panic!("Vault not initialized");
+        }
+
+        // Check if already paused
+        if env.storage().instance().has(&DataKey::PausedVault(vault_id)) {
+            panic!("Vault already paused");
+        }
+
+        let paused_vault = PausedVault {
+            vault_id,
+            pause_timestamp: env.ledger().timestamp(),
+            pause_authority: env.current_contract_address(), // Will be replaced with actual authority
+            reason,
+        };
+
+        env.storage().instance().set(&DataKey::PausedVault(vault_id), &paused_vault);
+    }
+
+    pub fn resume_specific_schedule(env: Env, vault_id: u64) {
+        Self::require_pause_authority(&env);
+
+        // Check if vault is actually paused
+        if !env.storage().instance().has(&DataKey::PausedVault(vault_id)) {
+            panic!("Vault not paused");
+        }
+
+        env.storage().instance().remove(&DataKey::PausedVault(vault_id));
+    }
+
+    pub fn set_pause_authority(env: Env, authority: Address) {
+        Self::require_admin(&env);
+        env.storage().instance().set(&DataKey::PauseAuthority, &authority);
+    }
+
+    pub fn get_pause_authority(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PauseAuthority)
+    }
+
+    pub fn is_vault_paused(env: Env, vault_id: u64) -> bool {
+        env.storage().instance().has(&DataKey::PausedVault(vault_id))
+    }
+
+    pub fn get_paused_vault_info(env: Env, vault_id: u64) -> Option<PausedVault> {
+        env.storage().instance().get(&DataKey::PausedVault(vault_id))
     }
 
     pub fn mark_irrevocable(env: Env, vault_id: u64) {
@@ -655,6 +722,21 @@ impl VestingContract {
         admin.require_auth();
     }
 
+    fn require_pause_authority(env: &Env) {
+        // Check if there's a designated pause authority
+        if
+            let Some(authority) = env
+                .storage()
+                .instance()
+                .get::<DataKey, Address>(&DataKey::PauseAuthority)
+        {
+            authority.require_auth();
+        } else {
+            // Fallback to admin if no specific pause authority is set
+            Self::require_admin(env);
+        }
+    }
+
     fn require_not_paused(env: &Env) {
         if env.storage().instance().get(&DataKey::IsPaused).unwrap_or(false) {
             panic!("Paused");
@@ -889,6 +971,32 @@ impl VestingContract {
     }
 
     fn calculate_claimable(env: &Env, id: u64, vault: &Vault) -> i128 {
+        // If vault is paused, calculate based on pause timestamp
+        if
+            let Some(paused_info) = env
+                .storage()
+                .instance()
+                .get::<DataKey, PausedVault>(&DataKey::PausedVault(id))
+        {
+            let pause_time = paused_info.pause_timestamp;
+            if pause_time <= vault.start_time {
+                return 0;
+            }
+            if pause_time >= vault.end_time {
+                return vault.total_amount;
+            }
+
+            let duration = (vault.end_time - vault.start_time) as i128;
+            let elapsed = (pause_time - vault.start_time) as i128;
+
+            if vault.step_duration > 0 {
+                let steps = duration / (vault.step_duration as i128);
+                let completed = elapsed / (vault.step_duration as i128);
+                (vault.total_amount / steps) * completed
+            } else {
+                (vault.total_amount * elapsed) / duration
+            }
+        } else if env.storage().instance().has(&DataKey::VaultMilestones(id)) {
         // Check if performance cliff is set and if it's passed
         if let Some(cliff) = env.storage().instance().get(&DataKey::VaultPerformanceCliff(id)) {
             if !OracleClient::is_cliff_passed(env, &cliff, id) {

@@ -1,9 +1,17 @@
+use crate::{ BatchCreateData, Milestone, PausedVault, VestingContract, VestingContractClient };
 use crate::{
     BatchCreateData, Milestone, ScheduleConfig, VestingContract, VestingContractClient,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    token, vec, Address, Env, IntoVal, Symbol, String, Map,
+    testutils::{ Address as _, Ledger },
+    token,
+    vec,
+    Address,
+    Env,
+    IntoVal,
+    Symbol,
+    String,
+    Map,
 };
 
 fn setup() -> (Env, Address, VestingContractClient<'static>, Address, Address) {
@@ -37,7 +45,7 @@ fn test_create_vault_full_and_claim() {
     let (env, _, client, admin, token) = setup();
     let beneficiary = Address::generate(&env);
     let now = env.ledger().timestamp();
-    
+
     let vault_id = client.create_vault_full(
         &beneficiary,
         &1000i128,
@@ -46,11 +54,11 @@ fn test_create_vault_full_and_claim() {
         &0i128,
         &false, // irrevocable
         &false,
-        &0u64,
+        &0u64
     );
 
     assert_eq!(vault_id, 1);
-    
+
     // Fast forward
     env.ledger().set_timestamp(now + 500);
     assert_eq!(client.get_claimable_amount(&vault_id), 500);
@@ -58,7 +66,7 @@ fn test_create_vault_full_and_claim() {
     // Claim
     client.claim_tokens(&vault_id, &100i128);
     assert_eq!(client.get_claimable_amount(&vault_id), 400);
-    
+
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&beneficiary), 100);
 }
@@ -68,7 +76,7 @@ fn test_periodic_vesting() {
     let (env, _, client, _, _) = setup();
     let beneficiary = Address::generate(&env);
     let now = env.ledger().timestamp();
-    
+
     // 1000 tokens over 1000 seconds, with 100 second steps
     let vault_id = client.create_vault_full(
         &beneficiary,
@@ -78,7 +86,7 @@ fn test_periodic_vesting() {
         &0i128,
         &true,
         &false,
-        &100u64,
+        &100u64
     );
 
     env.ledger().set_timestamp(now + 150);
@@ -95,7 +103,7 @@ fn test_milestones() {
     let (env, _, client, admin, _) = setup();
     let beneficiary = Address::generate(&env);
     let now = env.ledger().timestamp();
-    
+
     let vault_id = client.create_vault_full(
         &beneficiary,
         &1000i128,
@@ -104,21 +112,22 @@ fn test_milestones() {
         &0i128,
         &true,
         &false,
-        &0u64,
+        &0u64
     );
 
-    let milestones = vec![&env, 
+    let milestones = vec![
+        &env,
         Milestone { id: 1, percentage: 30, is_unlocked: false },
         Milestone { id: 2, percentage: 70, is_unlocked: false }
     ];
-    
+
     client.set_milestones(&vault_id, &milestones);
-    
+
     assert_eq!(client.get_claimable_amount(&vault_id), 0);
-    
+
     client.unlock_milestone(&vault_id, &1);
     assert_eq!(client.get_claimable_amount(&vault_id), 300);
-    
+
     client.unlock_milestone(&vault_id, &2);
     assert_eq!(client.get_claimable_amount(&vault_id), 1000);
 }
@@ -126,10 +135,10 @@ fn test_milestones() {
 #[test]
 fn test_global_pause() {
     let (env, _, client, admin, _) = setup();
-    
+
     client.toggle_pause();
     assert!(client.is_paused());
-    
+
     let beneficiary = Address::generate(&env);
     // Logic that depends on paused should fail
 }
@@ -140,7 +149,7 @@ fn test_batch_operations() {
     let r1 = Address::generate(&env);
     let r2 = Address::generate(&env);
     let now = env.ledger().timestamp();
-    
+
     let batch = BatchCreateData {
         recipients: vec![&env, r1, r2],
         amounts: vec![&env, 500i128, 500i128],
@@ -149,7 +158,7 @@ fn test_batch_operations() {
         keeper_fees: vec![&env, 0i128, 0i128],
         step_durations: vec![&env, 0u64, 0u64],
     };
-    
+
     let ids = client.batch_create_vaults_full(&batch);
     assert_eq!(ids.len(), 2);
     assert_eq!(ids.get(0).unwrap(), 1);
@@ -157,6 +166,46 @@ fn test_batch_operations() {
 }
 
 #[test]
+fn test_pause_specific_schedule() {
+    let (env, _, client, admin, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    let vault_id = client.create_vault_full(
+        &beneficiary,
+        &1000i128,
+        &now,
+        &(now + 1000),
+        &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+
+    // Fast forward to allow some vesting
+    env.ledger().set_timestamp(now + 500);
+    assert_eq!(client.get_claimable_amount(&vault_id), 500);
+
+    // Pause the vault
+    client.pause_specific_schedule(&vault_id, &String::from_str(&env, "Legal dispute"));
+
+    // Check that vault is paused
+    assert!(client.is_vault_paused(&vault_id));
+
+    // Get pause info
+    let pause_info = client.get_paused_vault_info(&vault_id).unwrap();
+    assert_eq!(pause_info.vault_id, vault_id);
+    assert_eq!(pause_info.pause_timestamp, now + 500);
+    assert_eq!(pause_info.reason, String::from_str(&env, "Legal dispute"));
+}
+
+#[test]
+fn test_pause_timestamp_locking() {
+    let (env, _, client, _, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    let vault_id = client.create_vault_full(
 fn test_batch_add_schedules_large_tge_batch() {
     let (env, _, client, _, _) = setup();
     let now = env.ledger().timestamp();
@@ -254,6 +303,30 @@ fn test_voting_power() {
         &now,
         &(now + 1000),
         &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+
+    // Fast forward to allow some vesting
+    env.ledger().set_timestamp(now + 500);
+
+    // Pause the vault
+    client.pause_specific_schedule(&vault_id, &String::from_str(&env, "Dispute"));
+
+    // Even if we fast forward more, claimable should be locked at pause time
+    env.ledger().set_timestamp(now + 800);
+    assert_eq!(client.get_claimable_amount(&vault_id), 500); // Still 500, locked at pause time
+}
+
+#[test]
+fn test_resume_specific_schedule() {
+    let (env, _, client, _, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    let vault_id = client.create_vault_full(
+        &beneficiary,
         &false, // is_revocable = false => is_irrevocable = true
         &false,
         &0u64,
@@ -292,6 +365,33 @@ fn test_delegated_voting_power() {
         &0i128,
         &false,
         &false,
+        &0u64
+    );
+
+    // Fast forward and pause
+    env.ledger().set_timestamp(now + 500);
+    client.pause_specific_schedule(&vault_id, &String::from_str(&env, "Legal dispute"));
+    assert!(client.is_vault_paused(&vault_id));
+
+    // Resume the vault
+    client.resume_specific_schedule(&vault_id);
+
+    // Check that vault is no longer paused
+    assert!(!client.is_vault_paused(&vault_id));
+    assert!(client.get_paused_vault_info(&vault_id).is_none());
+
+    // Claim should now work
+    client.claim_tokens(&vault_id, &100i128);
+    assert_eq!(client.get_claimable_amount(&vault_id), 400);
+}
+
+#[test]
+#[should_panic]
+fn test_pause_already_paused_vault() {
+    let (env, _, client, _, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
         &0u64,
     );
     
@@ -347,6 +447,25 @@ fn test_vesting_acceleration() {
         &now,
         &(now + 1000),
         &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+
+    // Pause once
+    client.pause_specific_schedule(&vault_id, &String::from_str(&env, "First pause"));
+
+    // Try to pause again - should panic
+    client.pause_specific_schedule(&vault_id, &String::from_str(&env, "Second pause"));
+}
+
+#[test]
+#[should_panic]
+fn test_resume_non_paused_vault() {
+    let (env, _, client, _, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
         &true,
         &false,
         &0u64,
@@ -386,6 +505,13 @@ fn test_slashing() {
         &now,
         &(now + 1000),
         &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+
+    // Try to resume without pausing first - should panic
+    client.resume_specific_schedule(&vault_id);
         &true,
         &false,
         &0u64,
