@@ -1,5 +1,4 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, vec, Address, Env, Map, Symbol, Vec, String};
 use soroban_sdk::{
     contract,
     contractimpl,
@@ -19,7 +18,6 @@ use soroban_sdk::{
 mod factory;
 pub use factory::{ VestingFactory, VestingFactoryClient };
 mod oracle;
-pub use factory::{ VestingFactory, VestingFactoryClient };
 pub use oracle::{ OracleClient, OracleCondition, OracleType, ComparisonOperator, PerformanceCliff };
 
 pub mod stake;
@@ -79,18 +77,9 @@ pub enum DataKey {
     TotalLockedValue,
     PausedVault(u64),
     PauseAuthority,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct PausedVault {
-    pub vault_id: u64,
-    pub pause_timestamp: u64,
-    pub pause_authority: Address,
-    pub reason: String,
+    NFTMinter,
     CollateralBridge,
     MetadataAnchor,
-    NFTMinter,
     VotingDelegate(Address),
     DelegatedBeneficiaries(Address),
     GlobalAccelerationPct,
@@ -100,9 +89,27 @@ pub struct PausedVault {
 
 #[contracttype]
 #[derive(Clone)]
-pub struct Vault {
+pub struct PausedVault {
+    pub vault_id: u64,
+    pub pause_timestamp: u64,
+    pub pause_authority: Address,
+    pub reason: String,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct AssetAllocation {
+    pub asset_id: Address,
     pub total_amount: i128,
     pub released_amount: i128,
+    pub locked_amount: i128, // Amount locked for collateral liens
+    pub percentage: u32, // Percentage of total allocation (basis points, 10000 = 100%)
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Vault {
+    pub allocations: Vec<AssetAllocation>, // Basket of assets
     pub keeper_fee: i128,
     pub staked_amount: i128,
     pub owner: Address,
@@ -116,7 +123,6 @@ pub struct Vault {
     pub is_irrevocable: bool,
     pub is_transferable: bool,
     pub is_frozen: bool,
-    pub locked_amount: i128, // Amount locked for collateral liens
 }
 
 #[contracttype]
@@ -161,7 +167,7 @@ pub struct Vote {
 #[contracttype]
 pub struct BatchCreateData {
     pub recipients: Vec<Address>,
-    pub amounts: Vec<i128>,
+    pub asset_baskets: Vec<Vec<AssetAllocation>>, // Each recipient gets a basket of assets
     pub start_times: Vec<u64>,
     pub end_times: Vec<u64>,
     pub keeper_fees: Vec<i128>,
@@ -172,13 +178,12 @@ pub struct BatchCreateData {
 #[derive(Clone)]
 pub struct ScheduleConfig {
     pub owner: Address,
-    pub amount: i128,
+    pub asset_basket: Vec<AssetAllocation>, // Basket of assets for this schedule
     pub start_time: u64,
     pub end_time: u64,
     pub keeper_fee: i128,
     pub is_revocable: bool,
     pub is_transferable: bool,
-    pub step_duration: u64,
 }
 
 #[contracttype]
@@ -407,6 +412,150 @@ impl VestingContract {
             step_duration
         )
     }
+    /// Creates a vault with a diversified asset basket (pre-funded)
+    pub fn create_vault_diversified_full(
+        env: Env,
+        owner: Address,
+        asset_basket: Vec<AssetAllocation>,
+        start_time: u64,
+        end_time: u64,
+        keeper_fee: i128,
+        is_revocable: bool,
+        is_transferable: bool,
+        step_duration: u64,
+        title: String,
+    ) -> u64 {
+        Self::require_admin(&env);
+
+        // Validate asset basket
+        if !Self::validate_asset_basket(&asset_basket) {
+            panic!("Asset basket percentages must sum to 10000 (100%)");
+        }
+
+        if asset_basket.is_empty() {
+            panic!("Asset basket cannot be empty");
+        }
+
+        // Validate timing
+        if start_time >= end_time {
+            panic!("Start time must be before end time");
+        }
+
+        let max_duration = 10 * 365 * 24 * 60 * 60; // 10 years in seconds
+        if end_time - start_time > max_duration {
+            panic!("Duration exceeds maximum allowed");
+        }
+
+        let vault_id = Self::increment_vault_count(&env);
+
+        // Transfer all assets from admin to contract
+        let admin = Self::get_admin(env.clone());
+        for allocation in asset_basket.iter() {
+            token::Client::new(&env, &allocation.asset_id)
+                .transfer(&admin, &env.current_contract_address(), &allocation.total_amount);
+        }
+
+        let vault = Vault {
+            allocations: asset_basket,
+            keeper_fee,
+            staked_amount: 0,
+            owner: owner.clone(),
+            delegate: None,
+            title,
+            start_time,
+            end_time,
+            creation_time: env.ledger().timestamp(),
+            step_duration,
+            is_initialized: true,
+            is_irrevocable: !is_revocable,
+            is_transferable,
+            is_frozen: false,
+        };
+
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+        Self::add_user_vault_index(&env, &owner, vault_id);
+
+        vault_id
+    }
+
+    /// Creates a vault with a diversified asset basket (lazy/unfunded)
+    pub fn create_vault_diversified_lazy(
+        env: Env,
+        owner: Address,
+        asset_basket: Vec<AssetAllocation>,
+        start_time: u64,
+        end_time: u64,
+        keeper_fee: i128,
+        is_revocable: bool,
+        is_transferable: bool,
+        step_duration: u64,
+        title: String,
+    ) -> u64 {
+        Self::require_admin(&env);
+
+        // Validate asset basket
+        if !Self::validate_asset_basket(&asset_basket) {
+            panic!("Asset basket percentages must sum to 10000 (100%)");
+        }
+
+        if asset_basket.is_empty() {
+            panic!("Asset basket cannot be empty");
+        }
+
+        // Validate timing
+        if start_time >= end_time {
+            panic!("Start time must be before end time");
+        }
+
+        let max_duration = 10 * 365 * 24 * 60 * 60; // 10 years in seconds
+        if end_time - start_time > max_duration {
+            panic!("Duration exceeds maximum allowed");
+        }
+
+        let vault_id = Self::increment_vault_count(&env);
+
+        let vault = Vault {
+            allocations: asset_basket,
+            keeper_fee,
+            staked_amount: 0,
+            owner: owner.clone(),
+            delegate: None,
+            title,
+            start_time,
+            end_time,
+            creation_time: env.ledger().timestamp(),
+            step_duration,
+            is_initialized: false, // Lazy vault starts uninitialized
+            is_irrevocable: !is_revocable,
+            is_transferable,
+            is_frozen: false,
+        };
+
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+        Self::add_user_vault_index(&env, &owner, vault_id);
+
+        vault_id
+    }
+    /// Initializes a lazy diversified vault by transferring all assets
+    pub fn initialize_diversified_vault(env: Env, vault_id: u64) {
+        Self::require_admin(&env);
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+
+        if vault.is_initialized {
+            panic!("Vault already initialized");
+        }
+
+        let admin = Self::get_admin(env.clone());
+
+        // Transfer all assets from admin to contract
+        for allocation in vault.allocations.iter() {
+            token::Client::new(&env, &allocation.asset_id)
+                .transfer(&admin, &env.current_contract_address(), &allocation.total_amount);
+        }
+
+        vault.is_initialized = true;
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
 
     pub fn create_vault_lazy(
         env: Env,
@@ -511,6 +660,70 @@ impl VestingContract {
         ids
     }
 
+    /// Claims tokens from a diversified vesting vault
+    /// Returns a vector of (asset_id, claimed_amount) pairs
+    pub fn claim_tokens_diversified(env: Env, vault_id: u64) -> Vec<(Address, i128)> {
+        Self::require_not_paused(&env);
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+        if vault.is_frozen {
+            panic!("Vault frozen");
+        }
+        if !vault.is_initialized {
+            panic!("Vault not initialized");
+        }
+
+        // Check if this specific vault schedule is paused
+        if Self::is_vault_paused(env.clone(), vault_id) {
+            panic!("Vault schedule paused");
+        }
+
+        vault.owner.require_auth();
+
+        // Heartbeat: reset Dead-Man's Switch on every primary interaction
+        update_activity(&env, vault_id);
+
+        // Validate asset basket
+        if !Self::validate_asset_basket(&vault.allocations) {
+            panic!("Invalid asset basket percentages");
+        }
+
+        let mut claimed_assets = Vec::new(&env);
+
+        // Calculate and claim each asset in the basket
+        for (i, allocation) in vault.allocations.iter().enumerate() {
+            let vested_amount = Self::calculate_claimable_for_asset(&env, vault_id, &vault, i);
+            let claimable_amount = vested_amount - allocation.released_amount;
+
+            if claimable_amount > 0 {
+                // Update the allocation's released amount
+                let mut updated_allocation = allocation.clone();
+                updated_allocation.released_amount += claimable_amount;
+                vault.allocations.set(i.try_into().unwrap(), updated_allocation);
+
+                // Transfer the tokens
+                token::Client::new(&env, &allocation.asset_id)
+                    .transfer(&env.current_contract_address(), &vault.owner, &claimable_amount);
+
+                claimed_assets.push_back((allocation.asset_id.clone(), claimable_amount));
+            }
+        }
+
+        // Save updated vault
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+
+        // Mint NFT if configured
+        if let Some(nft_minter) = env.storage().instance().get::<_, Address>(&DataKey::NFTMinter) {
+            env.invoke_contract::<()>(
+                &nft_minter,
+                &Symbol::new(&env, "mint"),
+                (&vault.owner,).into_val(&env),
+            );
+        }
+
+        claimed_assets
+    }
+
+    /// Legacy single-asset claim function for backward compatibility
     pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128 {
         Self::require_not_paused(&env);
         let mut vault = Self::get_vault_internal(&env, vault_id);
@@ -531,20 +744,26 @@ impl VestingContract {
         // Heartbeat: reset Dead-Man's Switch on every primary interaction
         update_activity(&env, vault_id);
 
-        let vested = Self::calculate_claimable(&env, vault_id, &vault);
-        if claim_amount > vested - vault.released_amount {
+        // For backward compatibility, only work with single-asset vaults
+        if vault.allocations.len() != 1 {
+            panic!("Use claim_tokens_diversified for multi-asset vaults");
+        }
+
+        let allocation = vault.allocations.get(0).unwrap();
+        let vested = Self::calculate_claimable_for_asset(&env, vault_id, &vault, 0);
+        if claim_amount > vested - allocation.released_amount {
             panic!("Insufficient vested tokens");
         }
 
-        vault.released_amount += claim_amount;
+        let mut updated_allocation = allocation.clone();
+        updated_allocation.released_amount += claim_amount;
+        vault.allocations.set(0, updated_allocation);
+
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
 
-        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
-        token::Client
-            ::new(&env, &token)
+        token::Client::new(&env, &allocation.asset_id)
             .transfer(&env.current_contract_address(), &vault.owner, &claim_amount);
-        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &vault.owner, &claim_amount);
-        
+
         if let Some(nft_minter) = env.storage().instance().get::<_, Address>(&DataKey::NFTMinter) {
             env.invoke_contract::<()>(
                 &nft_minter,
@@ -709,74 +928,208 @@ impl VestingContract {
         vault_id
     }
 
+    /// Gets total claimable amount across all assets (for backward compatibility)
     pub fn get_claimable_amount(env: Env, vault_id: u64) -> i128 {
         let vault = Self::get_vault_internal(&env, vault_id);
-        let vested = Self::calculate_claimable(&env, vault_id, &vault);
-        let claimable = vested - vault.released_amount;
-        // Subtract locked amount from claimable
-        claimable - vault.locked_amount.max(0)
+        Self::calculate_claimable(&env, vault_id, &vault)
     }
 
+    /// Gets claimable amounts for each asset in the basket
+    pub fn get_claimable_diversified(env: Env, vault_id: u64) -> Vec<(Address, i128)> {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        let mut claimable_amounts = Vec::new(&env);
+
+        for (i, allocation) in vault.allocations.iter().enumerate() {
+            let vested_amount = Self::calculate_claimable_for_asset(&env, vault_id, &vault, i);
+            let claimable_amount = vested_amount - allocation.released_amount;
+            claimable_amounts.push_back((allocation.asset_id.clone(), claimable_amount));
+        }
+
+        claimable_amounts
+    }
+
+    /// Locks tokens for a specific asset in the vault (for collateral)
+    pub fn lock_tokens_for_asset(env: Env, vault_id: u64, asset_id: Address, amount: i128) {
+        let bridge: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CollateralBridge)
+            .expect("Collateral bridge not set");
+        bridge.require_auth();
+
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+
+        // Find the asset allocation
+        let mut found = false;
+        for (i, allocation) in vault.allocations.iter().enumerate() {
+            if allocation.asset_id == asset_id {
+                let available = allocation.total_amount - allocation.released_amount - allocation.locked_amount;
+                if amount > available {
+                    panic!("Insufficient available tokens for locking");
+                }
+
+                let mut updated_allocation = allocation.clone();
+                updated_allocation.locked_amount += amount;
+                vault.allocations.set(i.try_into().unwrap(), updated_allocation);
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            panic!("Asset not found in vault");
+        }
+
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
+
+    /// Legacy function for single-asset vaults
     pub fn lock_tokens(env: Env, vault_id: u64, amount: i128) {
-        // Only authorized collateral bridge can call this
-        Self::require_collateral_bridge(&env);
-
-        let mut vault = Self::get_vault_internal(&env, vault_id);
-        let total_unvested = vault.total_amount - vault.released_amount;
-        let available_to_lock = total_unvested - vault.locked_amount;
-
-        if amount > available_to_lock {
-            panic!("Insufficient available tokens to lock");
+        let vault = Self::get_vault_internal(&env, vault_id);
+        if vault.allocations.len() != 1 {
+            panic!("Use lock_tokens_for_asset for multi-asset vaults");
         }
 
-        vault.locked_amount += amount;
+        let asset_id = vault.allocations.get(0).unwrap().asset_id.clone();
+        Self::lock_tokens_for_asset(env, vault_id, asset_id, amount);
+    }
+
+    /// Unlocks tokens for a specific asset in the vault
+    pub fn unlock_tokens_for_asset(env: Env, vault_id: u64, asset_id: Address, amount: i128) {
+        let bridge: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CollateralBridge)
+            .expect("Collateral bridge not set");
+        bridge.require_auth();
+
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+
+        // Find the asset allocation
+        let mut found = false;
+        for (i, allocation) in vault.allocations.iter().enumerate() {
+            if allocation.asset_id == asset_id {
+                if amount > allocation.locked_amount {
+                    panic!("Cannot unlock more than locked amount");
+                }
+
+                let mut updated_allocation = allocation.clone();
+                updated_allocation.locked_amount -= amount;
+                vault.allocations.set(i.try_into().unwrap(), updated_allocation);
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            panic!("Asset not found in vault");
+        }
+
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
     }
 
+    /// Legacy function for single-asset vaults
     pub fn unlock_tokens(env: Env, vault_id: u64, amount: i128) {
-        // Only authorized collateral bridge can call this
-        Self::require_collateral_bridge(&env);
+        let vault = Self::get_vault_internal(&env, vault_id);
+        if vault.allocations.len() != 1 {
+            panic!("Use unlock_tokens_for_asset for multi-asset vaults");
+        }
+
+        let asset_id = vault.allocations.get(0).unwrap().asset_id.clone();
+        Self::unlock_tokens_for_asset(env, vault_id, asset_id, amount);
+    }
+
+    /// Claims tokens by lender for a specific asset
+    pub fn claim_by_lender_for_asset(
+        env: Env,
+        vault_id: u64,
+        lender: Address,
+        asset_id: Address,
+        amount: i128,
+    ) -> i128 {
+        let bridge: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CollateralBridge)
+            .expect("Collateral bridge not set");
+        bridge.require_auth();
 
         let mut vault = Self::get_vault_internal(&env, vault_id);
 
-        if amount > vault.locked_amount {
-            panic!("Cannot unlock more than locked amount");
+        // Find the asset allocation
+        let mut found = false;
+        for (i, allocation) in vault.allocations.iter().enumerate() {
+            if allocation.asset_id == asset_id {
+                if amount > allocation.locked_amount {
+                    panic!("Cannot claim more than locked amount");
+                }
+
+                let mut updated_allocation = allocation.clone();
+                updated_allocation.locked_amount -= amount;
+                vault.allocations.set(i.try_into().unwrap(), updated_allocation);
+                found = true;
+                break;
+            }
         }
 
-        vault.locked_amount -= amount;
+        if !found {
+            panic!("Asset not found in vault");
+        }
+
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+
+        token::Client::new(&env, &asset_id)
+            .transfer(&env.current_contract_address(), &lender, &amount);
+
+        amount
+    }
+    /// Gets the asset basket for a vault
+    pub fn get_vault_asset_basket(env: Env, vault_id: u64) -> Vec<AssetAllocation> {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        vault.allocations
+    }
+
+    /// Updates the asset basket for a vault (admin only, before initialization)
+    pub fn update_vault_asset_basket(env: Env, vault_id: u64, new_basket: Vec<AssetAllocation>) {
+        Self::require_admin(&env);
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+
+        if vault.is_initialized {
+            panic!("Cannot update asset basket after initialization");
+        }
+
+        if !Self::validate_asset_basket(&new_basket) {
+            panic!("Asset basket percentages must sum to 10000 (100%)");
+        }
+
+        if new_basket.is_empty() {
+            panic!("Asset basket cannot be empty");
+        }
+
+        vault.allocations = new_basket;
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
     }
 
+    /// Gets vault statistics for diversified vesting
+    pub fn get_vault_statistics(env: Env, vault_id: u64) -> (i128, i128, i128, u32) {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        let total_value = Self::calculate_basket_total_value(&vault.allocations);
+        let released_value = Self::calculate_basket_released_value(&vault.allocations);
+        let claimable_value = Self::calculate_claimable(&env, vault_id, &vault) - released_value;
+        let asset_count = vault.allocations.len() as u32;
+
+        (total_value, released_value, claimable_value, asset_count)
+    }
+
+    /// Legacy function for single-asset vaults
     pub fn claim_by_lender(env: Env, vault_id: u64, lender: Address, amount: i128) -> i128 {
-        // Only authorized collateral bridge can call this
-        Self::require_collateral_bridge(&env);
-
-        let mut vault = Self::get_vault_internal(&env, vault_id);
-        if vault.is_frozen {
-            panic!("Vault frozen");
-        }
-        if !vault.is_initialized {
-            panic!("Vault not initialized");
+        let vault = Self::get_vault_internal(&env, vault_id);
+        if vault.allocations.len() != 1 {
+            panic!("Use claim_by_lender_for_asset for multi-asset vaults");
         }
 
-        let vested = Self::calculate_claimable(&env, vault_id, &vault);
-        let available_for_lender = (vested - vault.released_amount - vault.locked_amount).min(
-            amount
-        );
-
-        if available_for_lender <= 0 {
-            panic!("No tokens available for lender claim");
-        }
-
-        vault.released_amount += available_for_lender;
-        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
-
-        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
-        token::Client
-            ::new(&env, &token)
-            .transfer(&env.current_contract_address(), &lender, &available_for_lender);
-
-        available_for_lender
+        let asset_id = vault.allocations.get(0).unwrap().asset_id.clone();
+        Self::claim_by_lender_for_asset(env, vault_id, lender, asset_id, amount)
     }
 
     pub fn set_collateral_bridge(env: Env, bridge_address: Address) {
@@ -805,6 +1158,7 @@ impl VestingContract {
     pub fn get_metadata_anchor(env: Env) -> String {
         env.storage().instance().get(&DataKey::MetadataAnchor)
             .unwrap_or(String::from_str(&env, ""))
+    }
     pub fn get_user_vaults(env: Env, user: Address) -> Vec<u64> {
         env.storage().instance().get(&DataKey::UserVaults(user)).unwrap_or(Vec::new(&env))
     }
@@ -1235,23 +1589,28 @@ impl VestingContract {
         is_transferable: bool,
         step_duration: u64
     ) -> u64 {
+        // For backward compatibility, create a single-asset vault
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
+        let allocation = AssetAllocation {
+            asset_id: token,
+            total_amount: amount,
+            released_amount: 0,
+            locked_amount: 0,
+            percentage: 10000, // 100% in basis points
+        };
+        let mut allocations = Vec::new(env);
+        allocations.push_back(allocation);
+        
         Self::sub_admin_balance(env, amount);
         Self::create_vault_prefunded_internal(
             env,
             owner,
-            amount,
+            allocations,
             start_time,
             end_time,
             keeper_fee,
             is_revocable,
             is_transferable,
-            is_frozen: false,
-            locked_amount: 0,
-        };
-        env.storage().instance().set(&DataKey::VaultData(id), &vault);
-        Self::add_user_vault_index(env, &owner, id);
-        Self::add_total_shares(env, amount);
-        id
             step_duration,
             true,
         )
@@ -1268,11 +1627,22 @@ impl VestingContract {
         is_transferable: bool,
         step_duration: u64
     ) -> u64 {
-        Self::sub_admin_balance(env, amount);
+        // For backward compatibility, create a single-asset vault
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
+        let allocation = AssetAllocation {
+            asset_id: token,
+            total_amount: amount,
+            released_amount: 0,
+            locked_amount: 0,
+            percentage: 10000, // 100% in basis points
+        };
+        let mut allocations = Vec::new(env);
+        allocations.push_back(allocation);
+        
         Self::create_vault_prefunded_internal(
             env,
             owner,
-            amount,
+            allocations,
             start_time,
             end_time,
             keeper_fee,
@@ -1284,15 +1654,21 @@ impl VestingContract {
     }
 
     fn create_vault_prefunded_internal(
-        env: &Env, owner: Address, amount: i128, start_time: u64, end_time: u64,
-        keeper_fee: i128, is_revocable: bool, is_transferable: bool, step_duration: u64,
+        env: &Env, 
+        owner: Address, 
+        allocations: Vec<AssetAllocation>, 
+        start_time: u64, 
+        end_time: u64,
+        keeper_fee: i128, 
+        is_revocable: bool, 
+        is_transferable: bool, 
+        step_duration: u64,
         is_initialized: bool,
     ) -> u64 {
         Self::require_valid_duration(start_time, end_time);
         let id = Self::increment_vault_count(env);
         let vault = Vault {
-            total_amount: amount,
-            released_amount: 0,
+            allocations,
             keeper_fee,
             staked_amount: 0,
             owner: owner.clone(),
@@ -1306,13 +1682,13 @@ impl VestingContract {
             is_irrevocable: !is_revocable,
             is_transferable,
             is_frozen: false,
-            locked_amount: 0,
         };
         env.storage().instance().set(&DataKey::VaultData(id), &vault);
         if is_initialized {
             Self::add_user_vault_index(env, &owner, id);
         }
-        Self::add_total_shares(env, amount);
+        let total_amount = Self::calculate_basket_total_value(&vault.allocations);
+        Self::add_total_shares(env, total_amount);
         id
     }
 
@@ -1486,34 +1862,48 @@ impl VestingContract {
             .get(&DataKey::RevokedVaults)
             .unwrap_or(Vec::new(env));
         revoked.contains(&vault_id)
-    }    fn calculate_claimable(env: &Env, id: u64, vault: &Vault) -> i128 {
-    fn calculate_claimable(env: &Env, id: u64, vault: &Vault) -> i128 {
-        // If vault is paused, calculate based on pause timestamp
-        if
-            let Some(paused_info) = env
-                .storage()
-                .instance()
-                .get::<DataKey, PausedVault>(&DataKey::PausedVault(id))
-        {
-            let pause_time = paused_info.pause_timestamp;
-            if pause_time <= vault.start_time {
-                return 0;
-            }
-            if pause_time >= vault.end_time {
-                return vault.total_amount;
-            }
+    }    /// Validates that asset basket percentages sum to 10000 (100%)
+    fn validate_asset_basket(basket: &Vec<AssetAllocation>) -> bool {
+        let total_percentage: u32 = basket.iter().map(|a| a.percentage).sum();
+        total_percentage == 10000 // 100% in basis points
+    }
 
-            let duration = (vault.end_time - vault.start_time) as i128;
-            let elapsed = (pause_time - vault.start_time) as i128;
+    /// Calculates the total value of all assets in a basket
+    fn calculate_basket_total_value(basket: &Vec<AssetAllocation>) -> i128 {
+        basket.iter().map(|a| a.total_amount).sum()
+    }
 
-            if vault.step_duration > 0 {
-                let steps = duration / (vault.step_duration as i128);
-                let completed = elapsed / (vault.step_duration as i128);
-                (vault.total_amount / steps) * completed
-            } else {
-                (vault.total_amount * elapsed) / duration
-            }
-        } else if env.storage().instance().has(&DataKey::VaultMilestones(id)) {
+    /// Calculates the total released value of all assets in a basket
+    fn calculate_basket_released_value(basket: &Vec<AssetAllocation>) -> i128 {
+        basket.iter().map(|a| a.released_amount).sum()
+    }
+
+    /// Creates a new asset allocation with validation
+    pub fn create_asset_allocation(
+        asset_id: Address,
+        total_amount: i128,
+        percentage: u32,
+    ) -> AssetAllocation {
+        if total_amount <= 0 {
+            panic!("Asset amount must be positive");
+        }
+        if percentage == 0 || percentage > 10000 {
+            panic!("Asset percentage must be between 1 and 10000 basis points");
+        }
+        
+        AssetAllocation {
+            asset_id,
+            total_amount,
+            released_amount: 0,
+            locked_amount: 0,
+            percentage,
+        }
+    }
+
+    /// Calculates claimable amount for a specific asset in the basket
+    fn calculate_claimable_for_asset(env: &Env, id: u64, vault: &Vault, asset_index: usize) -> i128 {
+        let allocation = vault.allocations.get(asset_index.try_into().unwrap()).unwrap();
+        
         // Check if performance cliff is set and if it's passed
         if let Some(cliff) = env.storage().instance().get(&DataKey::VaultPerformanceCliff(id)) {
             if !OracleClient::is_cliff_passed(env, &cliff, id) {
@@ -1522,7 +1912,32 @@ impl VestingContract {
             }
         }
 
-        if env.storage().instance().has(&DataKey::VaultMilestones(id)) {
+        // If vault is paused, calculate based on pause timestamp
+        if let Some(paused_info) = env
+            .storage()
+            .instance()
+            .get::<DataKey, PausedVault>(&DataKey::PausedVault(id))
+        {
+            let pause_time = paused_info.pause_timestamp;
+            if pause_time <= vault.start_time {
+                return 0;
+            }
+            if pause_time >= vault.end_time {
+                return allocation.total_amount;
+            }
+
+            let duration = (vault.end_time - vault.start_time) as i128;
+            let elapsed = (pause_time - vault.start_time) as i128;
+
+            if vault.step_duration > 0 {
+                let steps = duration / (vault.step_duration as i128);
+                if steps == 0 { return 0; }
+                let completed = elapsed / (vault.step_duration as i128);
+                (allocation.total_amount * completed) / steps
+            } else {
+                (allocation.total_amount * elapsed) / duration
+            }
+        } else if env.storage().instance().has(&DataKey::VaultMilestones(id)) {
             let milestones: Vec<Milestone> = env
                 .storage()
                 .instance()
@@ -1537,21 +1952,8 @@ impl VestingContract {
             if pct > 100 {
                 pct = 100;
             }
-            }
-            if pct > 100 {
-                pct = 100;
-            }
-            (vault.total_amount * (pct as i128)) / 100
+            (allocation.total_amount * (pct as i128)) / 100
         } else {
-            let now = env.ledger().timestamp();
-            if now <= vault.start_time {
-                return 0;
-            }
-            if now >= vault.end_time {
-                return vault.total_amount;
-            }
-
-            let duration = (vault.end_time - vault.start_time) as i128;
             let mut now = env.ledger().timestamp();
             let accel_pct: u32 = env.storage().instance().get(&DataKey::GlobalAccelerationPct).unwrap_or(0);
             
@@ -1562,24 +1964,28 @@ impl VestingContract {
             }
 
             if now <= vault.start_time { return 0; }
-            if now >= vault.end_time { return vault.total_amount; }
+            if now >= vault.end_time { return allocation.total_amount; }
             
             let elapsed = (now - vault.start_time) as i128;
 
             if vault.step_duration > 0 {
-                let steps = duration / (vault.step_duration as i128);
-                let completed = elapsed / (vault.step_duration as i128);
-                (vault.total_amount / steps) * completed
                 let steps = duration / vault.step_duration as i128;
                 if steps == 0 { return 0; }
                 let completed = elapsed / vault.step_duration as i128;
-                (vault.total_amount * completed) / steps
+                (allocation.total_amount * completed) / steps
             } else {
-                (vault.total_amount * elapsed) / duration
+                (allocation.total_amount * elapsed) / duration
             }
         }
     }
 
+    /// Legacy function for backward compatibility - calculates total claimable across all assets
+    fn calculate_claimable(env: &Env, id: u64, vault: &Vault) -> i128 {
+        let mut total_claimable = 0;
+        for i in 0..vault.allocations.len() {
+            total_claimable += Self::calculate_claimable_for_asset(env, id, vault, i.try_into().unwrap());
+        }
+        total_claimable
     // --- Governance Helper Functions ---
 
     fn create_governance_proposal(env: Env, action: GovernanceAction) -> u64 {
@@ -1676,7 +2082,13 @@ impl VestingContract {
     }
 }
 
+pub mod diversified_core;
+
 #[cfg(test)]
 mod test;
 #[cfg(test)]
 mod invariant_test;
+#[cfg(test)]
+mod diversified_test;
+#[cfg(test)]
+mod diversified_simple_test;
