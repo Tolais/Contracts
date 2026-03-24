@@ -1,6 +1,6 @@
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
-use vesting_contracts::{BatchCreateData, VestingContract, VestingContractClient, MAX_DURATION};
+use vesting_contracts::{BatchCreateData, ScheduleConfig, VestingContract, VestingContractClient, MAX_DURATION};
 
 fn setup(env: &Env) -> (VestingContractClient<'static>, Address) {
     env.mock_all_auths();
@@ -99,4 +99,30 @@ fn batch_create_vaults_rejects_over_max_duration() {
     };
 
     client.batch_create_vaults_lazy(&batch);
+}
+
+#[test]
+#[should_panic(expected = "duration exceeds MAX_DURATION")]
+fn batch_add_schedules_rejects_over_max_duration() {
+    let env = Env::default();
+    let (client, _admin) = setup(&env);
+
+    let start = 100u64;
+    let end = start + MAX_DURATION + 1;
+
+    let schedules = vec![
+        &env,
+        ScheduleConfig {
+            owner: Address::generate(&env),
+            amount: 1_000i128,
+            start_time: start,
+            end_time: end,
+            keeper_fee: 0i128,
+            is_revocable: true,
+            is_transferable: false,
+            step_duration: 0u64,
+        },
+    ];
+
+    client.batch_add_schedules(&schedules);
 }

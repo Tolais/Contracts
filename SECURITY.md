@@ -5,6 +5,7 @@
 This document provides security guidance for administrators managing the vesting vault system on the Soroban smart contract platform. It focuses on a specific security limitation called "revocation front-running" and provides practical procedures to minimize associated risks.
 
 **What This Document Covers:**
+
 - A detailed explanation of the revocation front-running attack and why it exists
 - Technical background on how Stellar and Soroban handle transactions
 - Step-by-step procedures for safely revoking tokens from vaults
@@ -12,15 +13,17 @@ This document provides security guidance for administrators managing the vesting
 - Emergency response procedures if front-running occurs
 
 **Who Should Read This Document:**
+
 - Administrators responsible for managing vesting vaults and revoking tokens
 - Security personnel overseeing blockchain operations
 - Legal and compliance teams assessing risk exposure
 - Technical staff implementing operational procedures
 
-**Key Takeaway:**  
+**Key Takeaway:**
 Revocation front-running is a fundamental limitation of public blockchain transparency that cannot be completely eliminated. However, by following the freeze-then-revoke procedure and operational security practices outlined in this document, administrators can effectively prevent this attack and safely manage token revocations.
 
 **Document Structure:**
+
 - **Known Limitations**: Detailed analysis of the revocation front-running attack
 - **Operational Security Guidance**: Step-by-step procedures for safe revocation
 - **Glossary**: Definitions of technical terms for accessibility
@@ -32,114 +35,114 @@ This glossary defines technical terms used throughout this document to ensure ac
 
 ### Blockchain and Network Terms
 
-**Administrator**  
+**Administrator**
 The privileged account authorized to manage vaults, including freezing vaults and revoking unvested tokens. Typically represents the organization or treasury that created the vesting vault.
 
-**Beneficiary**  
+**Beneficiary**
 The account that owns a vesting vault and has the right to claim vested tokens according to the vesting schedule. Typically represents an employee, contractor, or other token recipient.
 
-**Blockchain**  
+**Blockchain**
 A distributed ledger technology where transactions are recorded in blocks and linked together in a chain. Stellar is the blockchain platform on which Soroban smart contracts run.
 
-**Ledger**  
+**Ledger**
 A single block in the Stellar blockchain containing a set of transactions. Stellar ledgers close approximately every 5 seconds, meaning transactions are confirmed and finalized at 5-second intervals.
 
-**Mempool (Transaction Queue)**  
+**Mempool (Transaction Queue)**
 The pool of pending transactions that have been submitted to the network but not yet included in a closed ledger. Transactions in the mempool are visible to all network participants, creating the transparency that enables front-running attacks.
 
-**Smart Contract**  
+**Smart Contract**
 Self-executing code deployed on a blockchain that automatically enforces rules and executes operations. The vesting vault system is implemented as a Soroban smart contract.
 
-**Soroban**  
+**Soroban**
 The smart contract platform on the Stellar blockchain where the vesting vault system is deployed. Soroban provides fast finality (5 seconds) and supports complex contract logic.
 
-**Stellar**  
+**Stellar**
 The blockchain network that hosts Soroban smart contracts. Stellar uses the Stellar Consensus Protocol (SCP) to achieve agreement on transaction ordering and ledger state.
 
-**Stellar Consensus Protocol (SCP)**  
+**Stellar Consensus Protocol (SCP)**
 The consensus mechanism used by Stellar to agree on which transactions to include in each ledger. SCP is a federated Byzantine agreement system that provides strong finality guarantees without mining or staking.
 
-**Transaction**  
+**Transaction**
 An operation submitted to the blockchain that modifies the ledger state. Examples include claiming tokens from a vault, revoking tokens, or freezing a vault.
 
-**Transaction Fee (Gas Fee)**  
+**Transaction Fee (Gas Fee)**
 The cost (in stroops, the smallest unit of Stellar's native currency XLM) required to submit a transaction to the network. During normal operation, fees do not affect transaction ordering. During surge pricing mode (network congestion), higher fees increase the probability of inclusion in the next ledger.
 
 ### Vesting Vault Terms
 
-**Claim Transaction**  
+**Claim Transaction**
 A transaction submitted by a beneficiary to withdraw vested tokens from their vault. The `claim_tokens()` function transfers tokens from the vault to the beneficiary's account.
 
-**Freeze Mechanism**  
+**Freeze Mechanism**
 A security feature that allows the administrator to temporarily disable claims on a specific vault by setting the `is_frozen` flag to `true`. Frozen vaults cannot process claim transactions, but can still be revoked by the administrator.
 
-**Revocation Transaction**  
+**Revocation Transaction**
 A transaction submitted by the administrator to reclaim unvested tokens from a beneficiary's vault. The `revoke_tokens()` function returns unvested tokens to the administrator's balance.
 
-**Unvested Tokens**  
+**Unvested Tokens**
 Tokens that have been allocated to a vault but have not yet completed their vesting schedule. These tokens cannot be claimed by the beneficiary and can be revoked by the administrator.
 
-**Vault**  
+**Vault**
 A smart contract data structure that holds tokens allocated to a beneficiary and enforces a vesting schedule. Each vault tracks the total allocation, vesting progress, and tokens already claimed.
 
-**Vested Tokens**  
+**Vested Tokens**
 Tokens that have completed their vesting schedule and are available for the beneficiary to claim. Vested tokens represent the beneficiary's earned entitlement.
 
-**Vesting Schedule**  
+**Vesting Schedule**
 The timeline that determines when tokens become vested and claimable. Common schedules include linear vesting (e.g., 25% per year over 4 years) or milestone-based vesting (tokens unlock when specific goals are achieved).
 
 ### Front-Running Attack Terms
 
-**Attack Window**  
+**Attack Window**
 The time period during which a beneficiary can observe a pending revocation transaction and submit a competing claim transaction. On Stellar, this window is approximately 5 seconds (one ledger close period).
 
-**Extractable Value**  
+**Extractable Value**
 The maximum amount of tokens a beneficiary can claim through a front-running attack, calculated as: `(vested_amount - released_amount) × token_price`. This represents the financial impact of a successful attack.
 
-**Front-Running Attack**  
+**Front-Running Attack**
 A scenario where a beneficiary observes a pending revocation transaction in the mempool and submits a competing claim transaction to extract vested tokens before the revocation executes. The attack exploits the race condition between revoke and claim operations.
 
-**Mempool Monitoring**  
+**Mempool Monitoring**
 The practice of observing pending transactions in the mempool to detect specific operations. Beneficiaries can use mempool monitoring to detect pending revocations and attempt front-running. Administrators can use it to detect competing claim transactions.
 
-**Race Condition**  
+**Race Condition**
 A situation where the outcome depends on the relative timing or ordering of events that cannot be controlled. In the vesting vault system, the race condition occurs when both revoke and claim transactions are submitted to the same ledger, and the execution order determines which operation succeeds.
 
-**Surge Pricing Mode**  
+**Surge Pricing Mode**
 A network state that occurs when transaction volume exceeds ledger capacity. During surge pricing, transactions with higher fees are prioritized for inclusion in the next ledger. This allows beneficiaries to increase their front-running success probability by paying higher fees.
 
 ### Operational Security Terms
 
-**Freeze-Then-Revoke Procedure**  
+**Freeze-Then-Revoke Procedure**
 The recommended operational security procedure for safely revoking tokens: (1) submit freeze transaction, (2) wait for freeze confirmation, (3) submit revocation transaction. This two-step process eliminates the race condition by preventing claims before revocation.
 
-**Off-Chain Coordination**  
+**Off-Chain Coordination**
 Communication and negotiation between the administrator and beneficiary outside the blockchain (e.g., via email, phone, or in-person meetings) to agree on revocation timing and avoid adversarial scenarios.
 
-**Operational Security**  
+**Operational Security**
 Procedures and practices that administrators follow to minimize security risks during vault operations. For revocation, this includes proper use of the freeze mechanism, timing optimization, and monitoring.
 
-**Preemptive Freezing**  
+**Preemptive Freezing**
 The practice of freezing a vault before a revocation decision is finalized, typically used for high-risk scenarios (e.g., employment termination proceedings, high-value vaults). This eliminates the freeze front-running window but restricts beneficiary access during the freeze period.
 
-**Transaction Confirmation**  
+**Transaction Confirmation**
 The process of verifying that a transaction has been included in a closed ledger and is finalized. On Stellar, confirmation typically occurs within 5-6 seconds, and confirmed transactions cannot be reversed.
 
 ### Technical Terms
 
-**Atomicity**  
+**Atomicity**
 A property of transactions where all operations either succeed together or fail together - there is no partial execution. Vault operations (claim, revoke, freeze) are atomic, ensuring consistent state changes.
 
-**Finality**  
+**Finality**
 The guarantee that a confirmed transaction cannot be reversed or replaced. Stellar provides strong finality - once a ledger closes, the transaction order is permanent and no chain reorganizations can occur.
 
-**Pseudo-Random Ordering**  
+**Pseudo-Random Ordering**
 Stellar's approach to ordering transactions within a ledger during normal operation. Transactions are applied in a randomized order (not fee-based order) to prevent high-frequency trading manipulation and fee-based front-running.
 
-**State**  
+**State**
 The current data stored in a smart contract or vault. Vault state includes fields like `total_amount`, `released_amount`, `is_frozen`, and `is_irrevocable`.
 
-**Stroop**  
+**Stroop**
 The smallest unit of Stellar's native currency (XLM). One XLM equals 10,000,000 stroops. Transaction fees are typically measured in stroops (e.g., 100 stroops for a standard transaction).
 
 ### Usage Notes
@@ -206,6 +209,7 @@ The attack unfolds in the following sequence:
 Consider the following scenario:
 
 **Initial Vault State**
+
 - Total tokens allocated: 100,000 tokens
 - Vested tokens (claimable by beneficiary): 40,000 tokens
 - Unvested tokens (revocable by administrator): 60,000 tokens
@@ -214,37 +218,44 @@ Consider the following scenario:
 
 **Timeline of Events**
 
-*T = 0 seconds*
+_T = 0 seconds_
+
 - Company decides to terminate Alice's employment
 - Administrator prepares revocation transaction to reclaim 60,000 unvested tokens
 - Alice's monitoring software is actively watching the mempool
 
-*T = 0.1 seconds*
+_T = 0.1 seconds_
+
 - Administrator submits `revoke_tokens(alice_vault)` transaction with standard fee (100 stroops)
 - Transaction enters Stellar mempool
 - Transaction is visible to all network participants
 
-*T = 0.5 seconds*
+_T = 0.5 seconds_
+
 - Alice's monitoring software detects the pending revocation transaction
 - Software identifies that alice_vault is the target
 - Software calculates that 40,000 vested tokens are at risk of being inaccessible after revocation
 
-*T = 1.0 seconds*
+_T = 1.0 seconds_
+
 - Alice's software automatically submits `claim_tokens(alice_vault, 40000)` transaction
 - During surge pricing mode, Alice's software submits with higher fee (500 stroops) to prioritize inclusion
 - Both transactions are now pending in the mempool
 
-*T = 5.0 seconds*
+_T = 5.0 seconds_
+
 - Next Stellar ledger closes
 - Both transactions are included in the ledger
 
 **Scenario A: Claim Executes First (Front-Running Success)**
+
 - Alice's claim transaction executes: 40,000 tokens transferred to Alice's account
 - Administrator's revocation executes: 60,000 unvested tokens returned to administrator
 - **Result**: Alice successfully extracted all vested tokens before revocation
 - **Financial Impact**: Alice gained 40,000 tokens that the administrator may have intended to freeze or coordinate differently
 
 **Scenario B: Revocation Executes First (Front-Running Prevented)**
+
 - Administrator's revocation executes: 60,000 unvested tokens returned to administrator
 - If vault includes freeze mechanism: Alice's claim transaction fails (vault frozen)
 - If no freeze mechanism: Alice's claim may still succeed for any remaining vested tokens
@@ -263,6 +274,7 @@ Consider the following scenario:
 **Why This is a Fundamental Limitation**
 
 This attack vector exists due to fundamental blockchain design principles:
+
 - **Transparency**: Public blockchains require transaction visibility for validation and consensus
 - **Decentralization**: No central authority can hide or prioritize transactions arbitrarily
 - **Permissionless Access**: Any participant can submit transactions and observe the mempool
@@ -277,12 +289,14 @@ The front-running risk cannot be eliminated without sacrificing these core block
 Stellar's transaction ordering mechanism operates differently depending on network conditions:
 
 **Normal Operation (Below Capacity)**
+
 - Transactions are applied in pseudo-random order within each ledger
 - Fee amounts do not affect execution order during normal operation
 - This randomization prevents high-frequency trading (HFT) manipulation and front-running based on fee priority
 - [Source: Stellar Stack Exchange](https://stellar.stackexchange.com/questions/674/benefit-of-overpaying-fees)
 
 **Surge Pricing Mode (Network Congestion)**
+
 - When transaction volume exceeds ledger capacity limits, the network enters surge pricing mode
 - During surge pricing, fees act as bids for inclusion in the next ledger
 - Transactions with higher fee-to-operation ratios are prioritized for inclusion
@@ -290,6 +304,7 @@ Stellar's transaction ordering mechanism operates differently depending on netwo
 - [Source: Stellar Developer Blog](https://stellar.org/blog/developers/transaction-submission-timeouts-and-dynamic-fees-faq)
 
 **Mempool Visibility**
+
 - Stellar's transaction queue (mempool) is visible to network participants
 - Pending transactions can be observed before they are included in a ledger
 - This transparency is fundamental to blockchain design but enables front-running attacks
@@ -302,12 +317,14 @@ Stellar's transaction ordering mechanism operates differently depending on netwo
 Stellar and Soroban have recently introduced privacy capabilities, though they are not applicable to standard vesting vault operations:
 
 **X-Ray Protocol Upgrade (January 2026)**
+
 - Introduces zero-knowledge proof capabilities to Soroban through BN254 curves and Poseidon hashing
 - Enables verification of zero-knowledge proofs within smart contracts
 - Allows proving attributes of data without revealing the data itself
 - [Source: Stellar Blog - Financial Privacy](https://stellar.org/blog/developers/financial-privacy)
 
 **Privacy Pools Implementation**
+
 - Privacy Pools enable privacy-preserving transfers by obscuring links between deposits and withdrawals
 - Uses Groth16 zero-knowledge proofs over BLS12-381 curves
 - Participants deposit funds into a pool and can later withdraw without revealing which deposit corresponds to which withdrawal
@@ -315,6 +332,7 @@ Stellar and Soroban have recently introduced privacy capabilities, though they a
 - [Source: Stellar Blog - Privacy Pools](https://stellar.org/blog/ecosystem/prototyping-privacy-pools-on-stellar)
 
 **Limitations for Vesting Vault Operations**
+
 - Privacy Pools require a fundamentally different contract architecture (deposit/withdraw model)
 - The vesting vault system uses direct token operations (revoke/claim) that are inherently transparent
 - Retrofitting privacy features would require complete redesign of the vesting mechanism
@@ -322,18 +340,21 @@ Stellar and Soroban have recently introduced privacy capabilities, though they a
 - Privacy features are most effective for fungible token transfers, not for specific vault state changes
 
 **Practical Implications**
+
 - Standard Soroban transactions (including revoke and claim operations) remain fully transparent
 - Transaction content, including function calls and parameters, is visible once submitted
 - Privacy features are available for developers building new privacy-focused applications, but cannot be applied retroactively to existing transparent contract designs
 - For the vesting vault system, operational security measures remain the primary defense against front-running
 
 **Ledger Close Time and Confirmation**
+
 - Stellar ledgers close approximately every 5 seconds on average
 - Transaction confirmation typically occurs within 5-6 seconds under normal conditions
 - During network congestion, confirmation may take longer as transactions compete for inclusion
 - [Source: Stellar Stack Exchange](https://stellar.stackexchange.com/questions/2057/how-do-you-explain-variation-in-ledger-close-times)
 
 **Transaction Finality on Stellar**
+
 - Soroban provides 5-second smart contract finality, meaning transactions are considered final and irreversible once included in a closed ledger
 - Unlike proof-of-work blockchains (e.g., Bitcoin, Ethereum) where chain reorganizations can occur, Stellar's consensus mechanism prevents branching
 - Once a transaction is confirmed in a ledger, it cannot be reversed or replaced by an alternative chain
@@ -344,21 +365,24 @@ Stellar and Soroban have recently introduced privacy capabilities, though they a
 
 SCP is a federated Byzantine agreement (FBA) system that provides decentralized consensus without relying on mining or staking. Key properties include:
 
-*Consensus Mechanism Properties*
+_Consensus Mechanism Properties_
+
 - Each validator node chooses a quorum set (trusted nodes) and a threshold for agreement
 - Validators only accept ledger updates when their quorum set reaches consensus
 - SCP prioritizes safety and fault tolerance over liveness, meaning the network may pause rather than accept conflicting states
 - The protocol prevents chain branching, ensuring all honest nodes converge on a single ledger history
 - [Source: SCP Documentation](https://developers.stellar.org/docs/glossary/scp), [SCP Proof and Code](https://stellar.org/blog/foundation-news/stellar-consensus-protocol-proof-code)
 
-*Transaction Ordering and Finality*
+_Transaction Ordering and Finality_
+
 - Transactions within a ledger are applied in pseudo-random order (not fee-based order) during normal operation
 - This randomization prevents high-frequency trading manipulation and fee-based front-running under normal conditions
 - Once a ledger closes, the transaction order is final and cannot be changed
 - There is no concept of "reorgs" or alternative histories as in proof-of-work chains
 - [Source: Issuer-Enforced Finality Explained](https://www.stellar.org/blog/developers/issuer-enforced-finality-explained)
 
-*Front-Running Protection Analysis*
+_Front-Running Protection Analysis_
+
 - SCP does NOT inherently prevent front-running attacks
 - The consensus mechanism ensures agreement on which transactions to include, not on hiding transaction content
 - Mempool visibility remains a fundamental characteristic - pending transactions are observable to network participants
@@ -366,7 +390,8 @@ SCP is a federated Byzantine agreement (FBA) system that provides decentralized 
 - However, during surge pricing mode (network congestion), higher-fee transactions are prioritized for inclusion in the next ledger
 - An attacker can still observe pending transactions and submit competing transactions before the original is included
 
-*Key Distinction: Finality vs. Privacy*
+_Key Distinction: Finality vs. Privacy_
+
 - SCP provides strong finality guarantees (no chain reorganizations)
 - SCP does NOT provide transaction privacy or mempool obfuscation
 - The 5-second ledger close time creates a narrow but exploitable window for front-running
@@ -388,12 +413,14 @@ The combination of mempool visibility, 5-second finality, and SCP's consensus pr
 
 SCP's design characteristics have both protective and limiting effects:
 
-*Protective Aspects*
+_Protective Aspects_
+
 - Pseudo-random ordering during normal operation prevents guaranteed fee-based front-running within a single ledger
 - Strong finality eliminates uncertainty about transaction execution - once confirmed, the outcome is permanent
 - No possibility of chain reorganization means attackers cannot "undo" a revocation after it executes
 
-*Limiting Aspects*
+_Limiting Aspects_
+
 - SCP does not hide pending transactions - mempool visibility is inherent to the design
 - The 5-second ledger close time is predictable, giving attackers a known window to respond
 - During network congestion, surge pricing reintroduces fee-based prioritization for ledger inclusion
@@ -403,9 +430,9 @@ SCP's design characteristics have both protective and limiting effects:
 
 Stellar's front-running characteristics differ from other platforms:
 
-- *vs. Ethereum (pre-MEV protection)*: Stellar's pseudo-random ordering is better than pure fee-based ordering, but mempool visibility remains
-- *vs. Bitcoin*: Similar mempool visibility, but Stellar's 5-second finality is much faster than Bitcoin's ~10 minute blocks
-- *vs. Private/Permissioned chains*: Stellar prioritizes transparency and decentralization over transaction privacy
+- _vs. Ethereum (pre-MEV protection)_: Stellar's pseudo-random ordering is better than pure fee-based ordering, but mempool visibility remains
+- _vs. Bitcoin_: Similar mempool visibility, but Stellar's 5-second finality is much faster than Bitcoin's ~10 minute blocks
+- _vs. Private/Permissioned chains_: Stellar prioritizes transparency and decentralization over transaction privacy
 
 **Key Takeaway**: SCP provides strong consensus and finality guarantees but does not eliminate front-running risk. The protocol ensures that once a transaction executes, it is final and irreversible, but it does not prevent adversaries from observing pending transactions and submitting competing transactions. The pseudo-random ordering provides some protection during normal operation, but the mempool visibility and predictable 5-second ledger close times create sufficient opportunity for an attentive beneficiary to attempt front-running, especially during network congestion when fee-based prioritization becomes active.
 
@@ -456,26 +483,30 @@ Maximum_Extractable_Value = Vested_Tokens × Token_Price
 ```
 
 Where:
+
 - `Vested_Tokens` = The number of tokens that have vested in the vault at the time of revocation
 - `Token_Price` = The current market price per token (in USD, EUR, or other reference currency)
 
 **Impact Calculation Examples**
 
-*Example 1: Partial Vesting*
+_Example 1: Partial Vesting_
+
 - Total vault allocation: 100,000 tokens
 - Vested tokens at revocation time: 40,000 tokens
 - Unvested tokens: 60,000 tokens
 - Token price: $2.50 per token
 - **Maximum Extractable Value**: 40,000 × $2.50 = **$100,000**
 
-*Example 2: Mostly Vested*
+_Example 2: Mostly Vested_
+
 - Total vault allocation: 50,000 tokens
 - Vested tokens at revocation time: 45,000 tokens
 - Unvested tokens: 5,000 tokens
 - Token price: $10.00 per token
 - **Maximum Extractable Value**: 45,000 × $10.00 = **$450,000**
 
-*Example 3: Fully Unvested (No Risk)*
+_Example 3: Fully Unvested (No Risk)_
+
 - Total vault allocation: 200,000 tokens
 - Vested tokens at revocation time: 0 tokens
 - Unvested tokens: 200,000 tokens
@@ -536,13 +567,15 @@ It is critical to understand that **only vested tokens are at risk** in a front-
 
 **Token Risk Breakdown**
 
-*Vested Tokens (At Risk)*
+_Vested Tokens (At Risk)_
+
 - Vested tokens are those that have completed their vesting schedule and are claimable by the beneficiary
 - These tokens are at risk because the beneficiary can legitimately call `claim_tokens()` to withdraw them
 - The front-running attack exploits the race condition to claim these tokens before the administrator can coordinate or freeze the vault
 - **Risk Level**: High - these tokens can be extracted if the beneficiary acts quickly
 
-*Unvested Tokens (Not At Risk)*
+_Unvested Tokens (Not At Risk)_
+
 - Unvested tokens are those that have not yet completed their vesting schedule
 - These tokens are not claimable by the beneficiary under any circumstances
 - The `revoke_tokens()` function reclaims these tokens and returns them to the administrator
@@ -553,16 +586,19 @@ It is critical to understand that **only vested tokens are at risk** in a front-
 Consider a vault with both vested and unvested tokens:
 
 **Vault State at Revocation Time**
+
 - Total allocation: 100,000 tokens
 - Vested tokens: 40,000 tokens (40% of allocation)
 - Unvested tokens: 60,000 tokens (60% of allocation)
 
 **Scenario A: Beneficiary Front-Runs Successfully**
+
 1. Beneficiary's claim executes first: 40,000 vested tokens transferred to beneficiary
 2. Administrator's revocation executes second: 60,000 unvested tokens returned to administrator
 3. **Outcome**: Beneficiary extracted 40,000 tokens, administrator recovered 60,000 tokens
 
 **Scenario B: Administrator's Revocation Executes First**
+
 1. Administrator's revocation executes first: 60,000 unvested tokens returned to administrator
 2. If vault is frozen: Beneficiary's claim fails (0 tokens extracted)
 3. If vault is not frozen: Beneficiary's claim may still succeed for the 40,000 vested tokens
@@ -571,6 +607,7 @@ Consider a vault with both vested and unvested tokens:
 **Key Insight: Vesting Schedule as Partial Protection**
 
 The vesting schedule provides natural protection against front-running:
+
 - Early in the vesting period, few tokens have vested, so the extractable value is low
 - The administrator can minimize risk by revoking early (e.g., immediately upon employment termination)
 - The longer the administrator waits to revoke, the more tokens vest, and the higher the front-running risk
@@ -578,6 +615,7 @@ The vesting schedule provides natural protection against front-running:
 **Clarification: Revocation Does Not Affect Vested Tokens (Unless Vault is Frozen)**
 
 It is important to understand that the `revoke_tokens()` function typically only reclaims unvested tokens. Vested tokens remain claimable by the beneficiary even after revocation, unless:
+
 1. The vault is frozen before or during the revocation, preventing all claims
 2. The contract design includes a mechanism to revoke vested tokens (which would be unusual and potentially legally problematic)
 
@@ -586,6 +624,7 @@ Therefore, the front-running attack is not about "stealing" tokens that would ot
 **Risk Mitigation Through Vesting Schedule Design**
 
 Organizations can reduce front-running risk through careful vesting schedule design:
+
 - **Longer Cliff Periods**: Delay the initial vesting to reduce the window when tokens are at risk
 - **Shorter Vesting Periods**: Complete vesting quickly to eliminate the mixed-state window
 - **Frequent Vesting Events**: Vest tokens in small increments to reduce the extractable value at any given time
@@ -606,12 +645,14 @@ This section documents the technical behavior of the vault operation functions i
 
 The `revoke_tokens(vault_id)` function allows the administrator to reclaim unvested tokens from a beneficiary's vault and return them to the administrator's balance.
 
-*Function Signature*
+_Function Signature_
+
 ```rust
 pub fn revoke_tokens(env: Env, vault_id: u64) -> i128
 ```
 
-*Behavior*
+_Behavior_
+
 - Reclaims all unvested tokens from the specified vault
 - Calculates unvested amount as: `unreleased_amount = total_amount - released_amount`
 - Updates the vault's `released_amount` to equal `total_amount`, effectively marking all tokens as "released" (preventing future claims)
@@ -619,7 +660,8 @@ pub fn revoke_tokens(env: Env, vault_id: u64) -> i128
 - Emits a `TokensRevoked` event with the amount and timestamp
 - Returns the amount of tokens revoked
 
-*Preconditions*
+_Preconditions_
+
 1. **Administrator Authorization**: Only the contract administrator can call this function
    - The function calls `require_admin()` which panics if the caller is not the administrator
    - This prevents beneficiaries or other parties from revoking tokens
@@ -635,7 +677,8 @@ pub fn revoke_tokens(env: Env, vault_id: u64) -> i128
    - If `unreleased_amount <= 0`, the function panics with "No tokens available to revoke"
    - This prevents revocation of vaults where all tokens have already been claimed or revoked
 
-*Effects*
+_Effects_
+
 - **Vault State Change**: Sets `vault.released_amount = vault.total_amount`
   - This marks all tokens as "released" from the vault's perspective
   - Future claim attempts will fail because `available_to_claim = unlocked_amount - released_amount` will be <= 0
@@ -643,13 +686,15 @@ pub fn revoke_tokens(env: Env, vault_id: u64) -> i128
 - **Event Emission**: Publishes a `TokensRevoked` event for off-chain monitoring
 - **Atomicity**: The entire operation is atomic - either all state changes succeed or the transaction reverts
 
-*Interaction with Vault Freeze*
+_Interaction with Vault Freeze_
+
 - The `revoke_tokens` function does NOT check if the vault is frozen
 - Revocation can proceed even if the vault is frozen
 - This is intentional: freezing prevents beneficiary claims but does not prevent administrator revocation
 - The freeze mechanism is designed to protect the administrator's ability to revoke, not to prevent revocation itself
 
-*Key Insight: Revocation Does Not Affect Already-Claimed Tokens*
+_Key Insight: Revocation Does Not Affect Already-Claimed Tokens_
+
 - The function only reclaims tokens that have not yet been released (claimed) from the vault
 - If the beneficiary has already claimed some vested tokens, those tokens are not affected by revocation
 - This is why front-running is effective: the beneficiary can claim vested tokens before the revocation executes, permanently removing those tokens from the vault's balance
@@ -658,19 +703,22 @@ pub fn revoke_tokens(env: Env, vault_id: u64) -> i128
 
 The `claim_tokens(vault_id, claim_amount)` function allows a beneficiary to withdraw vested tokens from their vault.
 
-*Function Signature*
+_Function Signature_
+
 ```rust
 pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
 ```
 
-*Behavior*
+_Behavior_
+
 - Withdraws a specified amount of vested tokens from the vault
 - Calculates the amount of tokens that have vested (unlocked) based on the vesting schedule or milestones
 - Verifies that the requested claim amount does not exceed the available unlocked tokens
 - Updates the vault's `released_amount` to track the claim
 - Returns the amount of tokens claimed
 
-*Preconditions*
+_Preconditions_
+
 1. **Contract Must Not Be Paused**: The global contract pause flag must be false
    - If the contract is paused, the function panics with "Contract is paused - all withdrawals are disabled"
    - The pause mechanism is a global emergency stop that affects all vaults
@@ -695,7 +743,8 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
    - If `available_to_claim <= 0`, the function panics with "No tokens available to claim"
    - If `claim_amount > available_to_claim`, the function panics with "Insufficient unlocked tokens to claim"
 
-*Effects*
+_Effects_
+
 - **Vault State Change**: Increases `vault.released_amount` by the claimed amount
   - This tracks how many tokens have been withdrawn from the vault
   - Future claims will have a reduced `available_to_claim` amount
@@ -703,7 +752,8 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
 - **Staking Integration**: If the vault has staked tokens and the liquid balance is insufficient, the function automatically unstakes tokens to satisfy the claim
 - **Atomicity**: The entire operation is atomic - either all state changes succeed or the transaction reverts
 
-*Partial Claim Support*
+_Partial Claim Support_
+
 - The function fully supports partial claims
 - The beneficiary can claim any amount up to the `available_to_claim` limit
 - Multiple partial claims can be made over time as more tokens vest
@@ -713,7 +763,8 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
   - A lower vault balance means less value is at risk during a revocation front-running attack
   - Administrators should encourage beneficiaries to claim tokens regularly to minimize the extractable value
 
-*Vesting Calculation*
+_Vesting Calculation_
+
 - The function supports two vesting mechanisms:
   1. **Time-Based Vesting**: Calculates unlocked amount based on elapsed time since the vesting start date
      - Uses `calculate_time_vested_amount()` to compute the vested amount
@@ -723,7 +774,8 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
      - Milestones must be explicitly unlocked by the administrator or authorized party
 - The vesting mechanism determines how much of the vault's `total_amount` is available for claiming at any given time
 
-*Key Insight: Claims Are Irreversible*
+_Key Insight: Claims Are Irreversible_
+
 - Once tokens are claimed and transferred to the beneficiary's account, they cannot be revoked
 - The `revoke_tokens` function only affects tokens that remain in the vault (unreleased tokens)
 - This is why the race condition exists: if the claim executes before the revocation, the tokens are permanently transferred to the beneficiary
@@ -732,50 +784,54 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) -> i128
 
 The vault freeze mechanism is a critical security feature that allows the administrator to temporarily disable claims on a specific vault without affecting other vaults or the ability to revoke tokens.
 
-*freeze_vault Function*
+_freeze_vault Function_
 
 ```rust
 pub fn freeze_vault(env: Env, vault_id: u64)
 ```
 
-*Behavior*
+_Behavior_
+
 - Sets the vault's `is_frozen` flag to `true`
 - Prevents all claim operations on the vault until it is unfrozen
 - Does NOT prevent revocation operations (administrator can still revoke tokens from a frozen vault)
 - Emits a `VaultFrozen` event with the vault ID and timestamp
 
-*Preconditions*
+_Preconditions_
+
 1. **Administrator Authorization**: Only the contract administrator can freeze vaults
 2. **Vault Must Exist**: The vault ID must correspond to an existing vault
 3. **Vault Must Not Already Be Frozen**: If the vault is already frozen, the function panics with "Vault is already frozen"
 
-*unfreeze_vault Function*
+_unfreeze_vault Function_
 
 ```rust
 pub fn unfreeze_vault(env: Env, vault_id: u64)
 ```
 
-*Behavior*
+_Behavior_
+
 - Sets the vault's `is_frozen` flag to `false`
 - Re-enables claim operations on the vault
 - Emits a `VaultUnfrozen` event with the vault ID and timestamp
 
-*Preconditions*
+_Preconditions_
+
 1. **Administrator Authorization**: Only the contract administrator can unfreeze vaults
 2. **Vault Must Exist**: The vault ID must correspond to an existing vault
 3. **Vault Must Be Frozen**: If the vault is not frozen, the function panics with "Vault is not frozen"
 
-*Effect on Operations*
+_Effect on Operations_
 
-| Operation | Frozen Vault | Unfrozen Vault |
-|-----------|--------------|----------------|
-| `claim_tokens` | **BLOCKED** - Panics with "Vault is frozen - claims are disabled" | Allowed (if other preconditions met) |
-| `claim_as_delegate` | **BLOCKED** - Panics with "Vault is frozen - claims are disabled" | Allowed (if other preconditions met) |
-| `revoke_tokens` | **ALLOWED** - Freeze does not prevent revocation | Allowed |
-| `transfer_beneficiary` | Allowed - Beneficiary can still be changed | Allowed |
-| `set_milestones` | Allowed - Milestones can still be configured | Allowed |
+| Operation              | Frozen Vault                                                      | Unfrozen Vault                       |
+| ---------------------- | ----------------------------------------------------------------- | ------------------------------------ |
+| `claim_tokens`         | **BLOCKED** - Panics with "Vault is frozen - claims are disabled" | Allowed (if other preconditions met) |
+| `claim_as_delegate`    | **BLOCKED** - Panics with "Vault is frozen - claims are disabled" | Allowed (if other preconditions met) |
+| `revoke_tokens`        | **ALLOWED** - Freeze does not prevent revocation                  | Allowed                              |
+| `transfer_beneficiary` | Allowed - Beneficiary can still be changed                        | Allowed                              |
+| `set_milestones`       | Allowed - Milestones can still be configured                      | Allowed                              |
 
-*Role in Front-Running Prevention*
+_Role in Front-Running Prevention_
 
 The vault freeze mechanism is the **primary technical countermeasure** against revocation front-running:
 
@@ -799,9 +855,10 @@ The vault freeze mechanism is the **primary technical countermeasure** against r
    - This creates a "freeze front-running" scenario where the beneficiary races to claim before the freeze takes effect
    - To mitigate this, administrators should monitor the mempool and ensure the freeze transaction is confirmed before proceeding
 
-*Key Insight: Freeze is Necessary But Not Sufficient*
+_Key Insight: Freeze is Necessary But Not Sufficient_
 
 While the freeze mechanism is the most effective technical countermeasure, it is not a complete solution:
+
 - The freeze transaction itself is visible in the mempool, potentially alerting the beneficiary
 - The beneficiary can attempt to front-run the freeze transaction by submitting a claim before the freeze is confirmed
 - Operational security measures (monitoring, timing, off-chain coordination) are still necessary to minimize risk
@@ -841,34 +898,34 @@ Time (seconds)    Administrator                Beneficiary                  Bloc
 ─────────────────────────────────────────────────────────────────────────────────────────────
 T = 0.0           Decides to revoke            Monitoring mempool           Vault: 40k vested, 60k unvested
                   tokens from vault                                         Beneficiary balance: 0 tokens
-                                                                            
+
 T = 0.1           Submits revoke_tokens()      -                            Revocation tx enters mempool
                   transaction (100 stroops)                                 (visible to all participants)
-                                                                            
+
 T = 0.5           -                            Detects pending              Mempool: 1 transaction
                                                revocation transaction       (revoke_tokens)
-                                                                            
+
 T = 1.0           -                            Submits claim_tokens()       Mempool: 2 transactions
                                                transaction (500 stroops)    (revoke_tokens, claim_tokens)
-                                               with higher fee              
-                                                                            
+                                               with higher fee
+
 T = 5.0           -                            -                            Ledger closes
                                                                             Both transactions included
-                                                                            
+
 T = 5.0 + ε       -                            -                            Execution order determined:
                                                                             1. claim_tokens executes first
                                                                             2. revoke_tokens executes second
-                                                                            
+
 T = 5.1           -                            -                            After claim_tokens:
                                                                             - Vault: 0k vested, 60k unvested
                                                                             - Beneficiary balance: 40k tokens
                                                                             - vault.released_amount += 40k
-                                                                            
+
 T = 5.2           -                            -                            After revoke_tokens:
                                                                             - Vault: 0k vested, 0k unvested
                                                                             - Admin balance: +60k tokens
                                                                             - vault.released_amount = total_amount
-                                                                            
+
 T = 5.3           Revocation confirmed         Claim confirmed              FINAL STATE:
                   (60k tokens recovered)       (40k tokens extracted)       - Beneficiary: 40k tokens (SUCCESS)
                                                                             - Administrator: 60k tokens
@@ -876,6 +933,7 @@ T = 5.3           Revocation confirmed         Claim confirmed              FINA
 ```
 
 **Key Observations from Timing Diagram:**
+
 - The beneficiary has a 4.9-second window (T=0.1 to T=5.0) to detect and respond
 - The higher fee (500 vs 100 stroops) increases inclusion probability during surge pricing but does not guarantee execution order within the ledger
 - Once the ledger closes at T=5.0, the execution order is determined by pseudo-random selection
@@ -889,47 +947,47 @@ Time (seconds)    Administrator                Beneficiary                  Bloc
 ─────────────────────────────────────────────────────────────────────────────────────────────
 T = 0.0           Decides to revoke            Monitoring mempool           Vault: 40k vested, 60k unvested
                   tokens from vault                                         vault.is_frozen = false
-                                                                            
+
 T = 0.1           Submits freeze_vault()       -                            Freeze tx enters mempool
-                  transaction                                               
-                                                                            
+                  transaction
+
 T = 5.0           -                            -                            Ledger closes
                                                                             Freeze tx executes
-                                                                            
+
 T = 5.1           -                            -                            Vault: 40k vested, 60k unvested
                                                                             vault.is_frozen = true
-                                                                            
+
 T = 10.0          Freeze confirmed             Detects vault is frozen      Vault frozen, claims blocked
-                  Waits for confirmation                                    
-                                                                            
+                  Waits for confirmation
+
 T = 15.0          Submits revoke_tokens()      -                            Revocation tx enters mempool
-                  transaction                                               
-                                                                            
+                  transaction
+
 T = 15.5          -                            Detects pending              Mempool: 1 transaction
                                                revocation transaction       (revoke_tokens)
-                                                                            
+
 T = 16.0          -                            Submits claim_tokens()       Mempool: 2 transactions
                                                transaction (attempt)        (revoke_tokens, claim_tokens)
-                                                                            
+
 T = 20.0          -                            -                            Ledger closes
                                                                             Both transactions included
-                                                                            
+
 T = 20.0 + ε      -                            -                            Execution order determined:
                                                                             1. claim_tokens executes first
                                                                             2. revoke_tokens executes second
-                                                                            
+
 T = 20.1          -                            -                            claim_tokens execution:
                                                                             - Checks vault.is_frozen = true
                                                                             - PANICS: "Vault is frozen"
                                                                             - Transaction REVERTS
                                                                             - No state changes
-                                                                            
+
 T = 20.2          -                            -                            revoke_tokens execution:
                                                                             - Vault is frozen (does not block revocation)
                                                                             - Transfers 60k unvested tokens to admin
                                                                             - Sets vault.released_amount = total_amount
                                                                             - Transaction SUCCEEDS
-                                                                            
+
 T = 20.3          Revocation confirmed         Claim FAILED                 FINAL STATE:
                   (60k tokens recovered)       (0 tokens extracted)         - Beneficiary: 0 tokens (FAILURE)
                                                                             - Administrator: 60k tokens
@@ -938,6 +996,7 @@ T = 20.3          Revocation confirmed         Claim FAILED                 FINA
 ```
 
 **Key Observations from Prevention Diagram:**
+
 - The administrator freezes the vault in a separate transaction BEFORE submitting the revocation
 - The freeze transaction is confirmed at T=5.1, establishing `vault.is_frozen = true`
 - The administrator waits for freeze confirmation before submitting the revocation at T=15.0
@@ -967,7 +1026,7 @@ Execution Sequence:
      - Effect: vault.released_amount = 0 + 40,000 = 40,000
      - Effect: Transfer 40,000 tokens to beneficiary
      - Result: SUCCESS
-  
+
   2. revoke_tokens(vault_id) executes
      - Checks: vault.is_irrevocable = false ✓
      - Calculates: unreleased_amount = 100,000 - 40,000 = 60,000
@@ -981,7 +1040,7 @@ Final State:
   vault.released_amount = 100,000
   beneficiary_balance = +40,000 tokens
   administrator_balance = +60,000 tokens
-  
+
 Outcome: Beneficiary successfully front-ran the revocation
 ```
 
@@ -1003,7 +1062,7 @@ Execution Sequence:
      - Effect: vault.released_amount = 100,000
      - Effect: Transfer 100,000 tokens to administrator
      - Result: SUCCESS
-  
+
   2. claim_tokens(vault_id, 40000) executes
      - Checks: vault.is_frozen = false ✓
      - Calculates: available_to_claim = vested_amount - released_amount
@@ -1017,7 +1076,7 @@ Final State:
   vault.released_amount = 100,000
   beneficiary_balance = 0 tokens
   administrator_balance = +100,000 tokens
-  
+
 Outcome: Administrator prevented front-running by executing first
 Note: This outcome depends on the specific contract implementation. Some implementations may allow the revocation to reclaim ALL tokens (including vested), while others may only reclaim unvested tokens. The example above assumes revocation reclaims all unreleased tokens.
 ```
@@ -1038,7 +1097,7 @@ Execution Sequence:
      - Result: PANIC "Vault is frozen - claims are disabled"
      - Transaction REVERTS
      - No state changes
-  
+
   2. revoke_tokens(vault_id) executes
      - Checks: vault.is_irrevocable = false ✓
      - Checks: vault.is_frozen (NOT CHECKED - revocation ignores freeze)
@@ -1054,7 +1113,7 @@ Final State:
   beneficiary_balance = 0 tokens
   administrator_balance = +100,000 tokens
   vault.is_frozen = true
-  
+
 Outcome: Freeze mechanism completely prevented front-running
 ```
 
@@ -1090,7 +1149,7 @@ Front-Running Potential:
   Maximum Extractable Value = 10,000 tokens
   Beneficiary Incentive: MEDIUM
   Administrator Risk: MEDIUM
-  
+
 Prior Claims History:
   - Month 1: Claimed 10,000 tokens (released_amount = 10,000)
   - Month 2: Claimed 10,000 tokens (released_amount = 20,000)
@@ -1111,7 +1170,7 @@ Front-Running Potential:
   Maximum Extractable Value = 1,000 tokens
   Beneficiary Incentive: LOW
   Administrator Risk: LOW
-  
+
 Prior Claims History:
   - Weekly claims of small amounts
   - Vault balance kept minimal
@@ -1187,21 +1246,23 @@ This section evaluates technical countermeasures that can mitigate or eliminate 
 
 **1. Vault Freezing Mechanism (Currently Implemented)**
 
-*Description*
+_Description_
 
 The vault freezing mechanism is a binary flag (`is_frozen`) that, when set to `true`, prevents all claim operations on a specific vault while still allowing revocation operations. This creates a two-step revocation process:
+
 1. Administrator calls `freeze_vault(vault_id)` and waits for confirmation
 2. Administrator calls `revoke_tokens(vault_id)` after freeze is confirmed
 
-*Feasibility: IMPLEMENTED*
+_Feasibility: IMPLEMENTED_
 
 The vault freezing mechanism is already implemented in the current vesting vault system and is fully operational.
 
-*Effectiveness: HIGH (when used correctly)*
+_Effectiveness: HIGH (when used correctly)_
 
 The freeze mechanism provides strong protection against front-running when used according to the correct operational procedure:
 
 **Strengths:**
+
 - **Complete Attack Prevention**: If the vault is frozen before revocation, claim transactions will fail with "Vault is frozen - claims are disabled", regardless of execution order
 - **Granular Control**: Freezing affects only the target vault, not other vaults in the system
 - **Reversible**: Vaults can be unfrozen if needed (though typically unnecessary after revocation)
@@ -1209,6 +1270,7 @@ The freeze mechanism provides strong protection against front-running when used 
 - **Simple Implementation**: Uses a single boolean flag with minimal gas overhead
 
 **Limitations:**
+
 - **Requires Two Transactions**: The administrator must submit two separate transactions (freeze, then revoke), increasing operational complexity and gas costs
 - **Freeze Transaction is Visible**: The freeze transaction itself is visible in the mempool, potentially alerting the beneficiary
 - **Freeze Front-Running Risk**: A sophisticated beneficiary monitoring the mempool can attempt to front-run the freeze transaction by submitting a claim before the freeze is confirmed
@@ -1216,22 +1278,24 @@ The freeze mechanism provides strong protection against front-running when used 
 - **No Automatic Enforcement**: The system does not enforce the freeze-before-revoke pattern - administrators can still revoke without freezing
 
 **Trade-offs:**
+
 - **Cost vs. Security**: The two-transaction approach doubles the gas costs for revocation, but provides strong security guarantees
 - **Speed vs. Safety**: The freeze-then-revoke process takes at least two ledger close periods (~10 seconds minimum), compared to a single revocation transaction (~5 seconds)
 - **Complexity vs. Simplicity**: Administrators must understand and follow a multi-step procedure rather than a single revoke operation
 
 **Effectiveness Assessment:**
 
-| Scenario | Effectiveness | Notes |
-|----------|---------------|-------|
-| Administrator freezes before revoking | **100%** | Attack completely prevented |
-| Administrator freezes and revokes in same ledger | **~50%** | Race condition still exists between freeze and claim |
-| Administrator revokes without freezing | **0%** | No protection, full front-running risk |
-| Beneficiary front-runs the freeze transaction | **0%** | Claim executes before freeze, tokens extracted |
+| Scenario                                         | Effectiveness | Notes                                                |
+| ------------------------------------------------ | ------------- | ---------------------------------------------------- |
+| Administrator freezes before revoking            | **100%**      | Attack completely prevented                          |
+| Administrator freezes and revokes in same ledger | **~50%**      | Race condition still exists between freeze and claim |
+| Administrator revokes without freezing           | **0%**        | No protection, full front-running risk               |
+| Beneficiary front-runs the freeze transaction    | **0%**        | Claim executes before freeze, tokens extracted       |
 
 **Recommendation: STRONGLY RECOMMENDED**
 
 The vault freezing mechanism is the most effective technical countermeasure currently available. Administrators should:
+
 - Always freeze vaults before revoking
 - Wait for freeze confirmation before submitting revocation
 - Monitor mempool for competing claim transactions during the freeze window
@@ -1239,19 +1303,21 @@ The vault freezing mechanism is the most effective technical countermeasure curr
 
 **2. Two-Step Revocation Process (Announce Then Execute)**
 
-*Description*
+_Description_
 
 A two-step revocation process would introduce a mandatory delay between announcing the intent to revoke and executing the revocation. The process would work as follows:
+
 1. Administrator calls `announce_revocation(vault_id, delay_period)` - marks the vault as "pending revocation" with a timestamp
 2. System enforces a mandatory delay period (e.g., 24 hours, 7 days)
 3. After the delay period expires, administrator calls `execute_revocation(vault_id)` to complete the revocation
 4. During the delay period, claims may be blocked, allowed, or rate-limited depending on implementation
 
-*Feasibility: FEASIBLE (requires contract modification)*
+_Feasibility: FEASIBLE (requires contract modification)_
 
 Implementing a two-step revocation process would require significant contract modifications:
 
 **Required Changes:**
+
 - Add `revocation_announced_at` timestamp field to vault struct
 - Add `revocation_delay_period` configuration parameter
 - Modify `revoke_tokens` to check if announcement period has elapsed
@@ -1260,11 +1326,12 @@ Implementing a two-step revocation process would require significant contract mo
 - Modify `claim_tokens` to enforce restrictions during the announcement period
 
 **Implementation Complexity: MEDIUM**
+
 - Estimated development effort: 2-3 days
 - Testing effort: 2-3 days (including edge cases and timing scenarios)
 - Gas cost increase: Minimal (one additional timestamp storage per vault)
 
-*Effectiveness: MEDIUM TO HIGH (depends on implementation variant)*
+_Effectiveness: MEDIUM TO HIGH (depends on implementation variant)_
 
 The effectiveness of a two-step revocation process depends on how claims are handled during the announcement period:
 
@@ -1287,11 +1354,13 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) {
 ```
 
 **Effectiveness: HIGH**
+
 - Prevents front-running by blocking claims once revocation is announced
 - Functionally equivalent to the freeze mechanism but with a mandatory delay
 - Beneficiaries cannot extract tokens after announcement
 
 **Drawback:**
+
 - Creates a new front-running vector: beneficiaries can front-run the announcement transaction itself
 - The announcement transaction is visible in the mempool, giving beneficiaries ~5 seconds to submit a claim before the announcement is confirmed
 - This shifts the race condition from revocation to announcement, but does not eliminate it
@@ -1312,11 +1381,13 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) {
 ```
 
 **Effectiveness: LOW**
+
 - Does not prevent front-running - beneficiaries can still claim during the announcement period
 - The delay period gives beneficiaries more time to extract tokens, potentially increasing risk
 - Only benefit is transparency: beneficiaries are notified of impending revocation
 
 **Drawback:**
+
 - Provides no security benefit over the current system
 - May actually increase risk by giving beneficiaries advance notice
 
@@ -1343,36 +1414,40 @@ pub fn claim_tokens(env: Env, vault_id: u64, claim_amount: i128) {
 ```
 
 **Effectiveness: MEDIUM**
+
 - Limits the amount beneficiaries can extract during the announcement period
 - Provides partial protection by reducing extractable value
 - Allows beneficiaries to claim some vested tokens (maintaining fairness)
 
 **Drawback:**
+
 - Complex to implement correctly (requires tracking claim history, time windows, rate limits)
 - Still allows partial front-running (beneficiaries can extract up to the rate limit)
 - Rate limit calculation is subjective and may be difficult to calibrate fairly
 
 **Trade-offs:**
 
-| Aspect | Two-Step Process | Current System + Freeze |
-|--------|------------------|-------------------------|
-| Gas Cost | Higher (2 transactions + delay) | Higher (2 transactions) |
-| Time to Complete | Long (delay period + 2 transactions) | Fast (2 transactions, ~10 seconds) |
-| Front-Running Protection | Medium (depends on variant) | High (when used correctly) |
-| Operational Complexity | High (3-step process) | Medium (2-step process) |
-| Fairness to Beneficiaries | Higher (advance notice) | Lower (no notice) |
-| Implementation Effort | Medium (contract changes required) | None (already implemented) |
+| Aspect                    | Two-Step Process                     | Current System + Freeze            |
+| ------------------------- | ------------------------------------ | ---------------------------------- |
+| Gas Cost                  | Higher (2 transactions + delay)      | Higher (2 transactions)            |
+| Time to Complete          | Long (delay period + 2 transactions) | Fast (2 transactions, ~10 seconds) |
+| Front-Running Protection  | Medium (depends on variant)          | High (when used correctly)         |
+| Operational Complexity    | High (3-step process)                | Medium (2-step process)            |
+| Fairness to Beneficiaries | Higher (advance notice)              | Lower (no notice)                  |
+| Implementation Effort     | Medium (contract changes required)   | None (already implemented)         |
 
 **Comparison to Vault Freezing:**
 
 The two-step revocation process (Variant A: block claims during announcement) is functionally similar to the vault freezing mechanism but with key differences:
 
 **Similarities:**
+
 - Both require two transactions (announce/freeze, then revoke)
 - Both block claims during the critical period
 - Both are vulnerable to front-running of the first transaction (announcement/freeze)
 
 **Differences:**
+
 - Two-step process enforces a mandatory delay period (e.g., 24 hours), while freeze can be followed immediately by revocation
 - Two-step process provides advance notice to beneficiaries (potentially more fair), while freeze can be executed without warning
 - Two-step process requires contract modifications, while freeze is already implemented
@@ -1380,6 +1455,7 @@ The two-step revocation process (Variant A: block claims during announcement) is
 **Recommendation: NOT RECOMMENDED (redundant with freeze mechanism)**
 
 The two-step revocation process does not provide significant security benefits over the existing vault freezing mechanism:
+
 - **Variant A (block claims)**: Functionally equivalent to freeze but with mandatory delay - adds complexity without improving security
 - **Variant B (allow claims)**: Provides no security benefit and may increase risk
 - **Variant C (rate-limit claims)**: Complex to implement and only provides partial protection
@@ -1390,19 +1466,21 @@ The existing freeze mechanism is simpler, faster, and equally effective. If adva
 
 **3. Time-Locks on Claim Operations After Revocation Announcement**
 
-*Description*
+_Description_
 
 Time-locks would introduce a mandatory delay between when a beneficiary submits a claim transaction and when the claim can be executed. The mechanism would work as follows:
+
 1. Beneficiary calls `request_claim(vault_id, claim_amount)` - creates a pending claim request with a timestamp
 2. System enforces a mandatory delay period (e.g., 24 hours)
 3. After the delay period expires, beneficiary calls `execute_claim(vault_id)` to complete the claim
 4. During the delay period, the administrator can observe the pending claim and freeze the vault or revoke tokens
 
-*Feasibility: FEASIBLE (requires contract modification)*
+_Feasibility: FEASIBLE (requires contract modification)_
 
 Implementing time-locks on claim operations would require significant contract modifications:
 
 **Required Changes:**
+
 - Add `pending_claims` storage map to track pending claim requests
 - Add `claim_delay_period` configuration parameter
 - Split `claim_tokens` into `request_claim` and `execute_claim` functions
@@ -1411,22 +1489,25 @@ Implementing time-locks on claim operations would require significant contract m
 - Add cleanup logic to remove expired claim requests
 
 **Implementation Complexity: MEDIUM TO HIGH**
+
 - Estimated development effort: 3-4 days
 - Testing effort: 3-4 days (including edge cases, timing scenarios, and concurrent requests)
 - Gas cost increase: Moderate (additional storage for pending claims, two transactions per claim)
 - Storage management: Requires cleanup of expired/completed claim requests to prevent storage bloat
 
-*Effectiveness: HIGH (for preventing front-running)*
+_Effectiveness: HIGH (for preventing front-running)_
 
 Time-locks on claim operations would effectively eliminate the front-running attack vector by giving administrators visibility into pending claims before they execute.
 
 **Strengths:**
+
 - **Advance Warning**: Administrators can observe pending claim requests during the delay period
 - **Reaction Time**: The delay period (e.g., 24 hours) gives administrators ample time to freeze the vault or revoke tokens before the claim executes
 - **Transparent Intent**: Pending claims are visible on-chain, enabling monitoring and alerting systems
 - **Eliminates Race Condition**: The delay period removes the time pressure that enables front-running
 
 **Limitations:**
+
 - **Severe User Experience Degradation**: Beneficiaries must wait 24+ hours to claim vested tokens, even under normal circumstances (no revocation)
 - **Two Transactions Per Claim**: Beneficiaries must submit two transactions (request and execute), doubling gas costs and operational complexity
 - **Unfair to Honest Beneficiaries**: The vast majority of beneficiaries who would never attempt front-running are penalized with delays and extra costs
@@ -1436,37 +1517,40 @@ Time-locks on claim operations would effectively eliminate the front-running att
 
 **Trade-offs:**
 
-| Aspect | Time-Locks on Claims | Current System + Freeze |
-|--------|----------------------|-------------------------|
-| Front-Running Protection | **Very High** | High (when used correctly) |
-| User Experience | **Very Poor** (24+ hour delays) | Good (instant claims) |
-| Gas Cost for Beneficiaries | **High** (2 transactions per claim) | Low (1 transaction per claim) |
-| Gas Cost for Administrators | Low (1 transaction for revoke) | Higher (2 transactions: freeze + revoke) |
-| Fairness to Honest Users | **Very Poor** (all users penalized) | Good (only affects revocation scenarios) |
-| Implementation Complexity | **High** | None (already implemented) |
-| Storage Overhead | **High** (pending claims storage) | Low (single boolean flag per vault) |
+| Aspect                      | Time-Locks on Claims                | Current System + Freeze                  |
+| --------------------------- | ----------------------------------- | ---------------------------------------- |
+| Front-Running Protection    | **Very High**                       | High (when used correctly)               |
+| User Experience             | **Very Poor** (24+ hour delays)     | Good (instant claims)                    |
+| Gas Cost for Beneficiaries  | **High** (2 transactions per claim) | Low (1 transaction per claim)            |
+| Gas Cost for Administrators | Low (1 transaction for revoke)      | Higher (2 transactions: freeze + revoke) |
+| Fairness to Honest Users    | **Very Poor** (all users penalized) | Good (only affects revocation scenarios) |
+| Implementation Complexity   | **High**                            | None (already implemented)               |
+| Storage Overhead            | **High** (pending claims storage)   | Low (single boolean flag per vault)      |
 
 **Effectiveness Assessment:**
 
-| Scenario | Effectiveness | Notes |
-|----------|---------------|-------|
-| Beneficiary attempts front-running | **100%** | Administrator can freeze/revoke during delay period |
-| Normal claim (no revocation) | **N/A** | User experiences 24+ hour delay unnecessarily |
-| Multiple pending claims | **Complex** | Requires careful management of concurrent requests |
+| Scenario                           | Effectiveness | Notes                                               |
+| ---------------------------------- | ------------- | --------------------------------------------------- |
+| Beneficiary attempts front-running | **100%**      | Administrator can freeze/revoke during delay period |
+| Normal claim (no revocation)       | **N/A**       | User experiences 24+ hour delay unnecessarily       |
+| Multiple pending claims            | **Complex**   | Requires careful management of concurrent requests  |
 
 **Comparison to Vault Freezing:**
 
 Time-locks on claims provide stronger protection against front-running but at a severe cost to user experience:
 
 **Security Comparison:**
+
 - **Time-locks**: Proactive defense - prevents front-running by design
 - **Freeze mechanism**: Reactive defense - requires administrator action to prevent front-running
 
 **User Experience Comparison:**
+
 - **Time-locks**: All beneficiaries experience delays on every claim, regardless of whether revocation is occurring
 - **Freeze mechanism**: Only affects beneficiaries whose vaults are being revoked (rare event)
 
 **Fairness Comparison:**
+
 - **Time-locks**: Punishes all users (including honest beneficiaries) to prevent a rare attack
 - **Freeze mechanism**: Only affects users involved in revocation scenarios
 
@@ -1475,6 +1559,7 @@ Time-locks on claims provide stronger protection against front-running but at a 
 Time-locks on claim operations provide strong security guarantees but impose unacceptable costs on user experience:
 
 **Why Not Recommended:**
+
 1. **Disproportionate Impact**: The vast majority of claims occur under normal circumstances (no revocation). Imposing 24+ hour delays on all claims to prevent a rare attack is not justified.
 2. **User Experience Degradation**: Beneficiaries expect to claim vested tokens instantly. A 24-hour delay would significantly degrade the user experience and may violate user expectations.
 3. **Redundant with Freeze**: The existing freeze mechanism provides adequate protection when used correctly, without imposing delays on normal operations.
@@ -1483,6 +1568,7 @@ Time-locks on claim operations provide strong security guarantees but impose una
 
 **Alternative Approach:**
 If advance warning of claims is desired, consider implementing optional claim announcements rather than mandatory time-locks:
+
 - Beneficiaries can optionally announce claims in advance (e.g., for large amounts) to demonstrate good faith
 - Administrators can monitor for unannounced large claims as a potential front-running signal
 - This preserves instant claims for normal operations while providing transparency for high-risk scenarios
@@ -1491,21 +1577,23 @@ If advance warning of claims is desired, consider implementing optional claim an
 
 **Summary: Technical Countermeasure Comparison**
 
-| Countermeasure | Feasibility | Effectiveness | User Experience | Implementation Cost | Recommendation |
-|----------------|-------------|---------------|-----------------|---------------------|----------------|
-| **Vault Freezing** | Implemented | High | Good | None (already implemented) | **STRONGLY RECOMMENDED** |
-| **Two-Step Revocation** | Feasible | Medium | Fair | Medium | NOT RECOMMENDED (redundant) |
-| **Time-Locks on Claims** | Feasible | Very High | Very Poor | High | NOT RECOMMENDED (disproportionate) |
+| Countermeasure           | Feasibility | Effectiveness | User Experience | Implementation Cost        | Recommendation                     |
+| ------------------------ | ----------- | ------------- | --------------- | -------------------------- | ---------------------------------- |
+| **Vault Freezing**       | Implemented | High          | Good            | None (already implemented) | **STRONGLY RECOMMENDED**           |
+| **Two-Step Revocation**  | Feasible    | Medium        | Fair            | Medium                     | NOT RECOMMENDED (redundant)        |
+| **Time-Locks on Claims** | Feasible    | Very High     | Very Poor       | High                       | NOT RECOMMENDED (disproportionate) |
 
 **Overall Recommendation:**
 
 The **vault freezing mechanism** is the optimal technical countermeasure for preventing revocation front-running:
+
 - It is already implemented and requires no additional development effort
 - It provides high effectiveness when used according to proper operational procedures
 - It does not degrade user experience for normal claim operations
 - It imposes costs (two transactions, operational complexity) only on administrators during revocation scenarios, not on all users
 
 Administrators should focus on:
+
 1. **Operational Discipline**: Always freeze vaults before revoking, and wait for freeze confirmation
 2. **Monitoring**: Implement mempool monitoring to detect competing claim transactions during the freeze window
 3. **Preemptive Freezing**: Consider freezing vaults preemptively for high-risk beneficiaries (e.g., employees under performance review or termination proceedings)
@@ -1546,6 +1634,7 @@ Before initiating any revocation, administrators should:
 The freeze-then-revoke procedure is the core operational security measure. Administrators MUST follow this sequence:
 
 **Step 1: Submit Freeze Transaction**
+
 ```
 Action: Call freeze_vault(vault_id)
 Timing: Immediate
@@ -1553,6 +1642,7 @@ Gas Fee: Standard fee (no need to overpay)
 ```
 
 **Step 2: Wait for Freeze Confirmation**
+
 ```
 Action: Monitor ledger for freeze transaction inclusion
 Timing: Wait at least 1 ledger close period (~5 seconds)
@@ -1561,6 +1651,7 @@ CRITICAL: Do NOT proceed to Step 3 until freeze is confirmed
 ```
 
 **Step 3: Submit Revocation Transaction**
+
 ```
 Action: Call revoke_tokens(vault_id)
 Timing: After freeze confirmation
@@ -1568,6 +1659,7 @@ Gas Fee: Standard fee (no need to overpay)
 ```
 
 **Step 4: Verify Revocation Success**
+
 ```
 Action: Monitor ledger for revocation transaction inclusion
 Verification: Query vault state to confirm released_amount = total_amount
@@ -1575,11 +1667,13 @@ Result: Unvested tokens returned to administrator balance
 ```
 
 **Common Mistakes to Avoid:**
+
 - ❌ **Submitting freeze and revoke in the same transaction batch**: This creates a race condition - both transactions may be included in the same ledger, and if revoke executes before freeze, the attack window remains open
 - ❌ **Not waiting for freeze confirmation**: If you submit revoke before freeze is confirmed, the beneficiary can still claim during the window
 - ❌ **Revoking without freezing**: This leaves the full attack window open - the beneficiary has ~50% probability of front-running success
 
 **Timing Considerations:**
+
 - Minimum safe delay between freeze and revoke: 1 ledger close period (~5 seconds)
 - Recommended delay: 2-3 ledger close periods (~10-15 seconds) to account for network variability
 - During network congestion: Wait for explicit confirmation rather than relying on time estimates
@@ -1589,16 +1683,18 @@ Result: Unvested tokens returned to administrator balance
 During the critical window between freeze submission and revocation execution, administrators should monitor for competing claim transactions:
 
 **Monitoring Approach:**
+
 - **Manual Monitoring**: Use Stellar block explorers or mempool monitoring tools to observe pending transactions
   - Look for `claim_tokens` transactions targeting the vault being revoked
   - If detected, the beneficiary is attempting to front-run the freeze
-  
+
 - **Automated Monitoring**: Implement automated alerts for claim transactions on target vaults
   - Subscribe to mempool feeds or transaction streams
   - Filter for transactions calling `claim_tokens` with the target vault_id
   - Alert administrators immediately if a competing claim is detected
 
 **Response to Detected Front-Running Attempt:**
+
 - If a claim transaction is detected in the mempool before freeze confirmation:
   - **Do NOT panic** - the freeze transaction is already submitted and will likely be confirmed first
   - Monitor which transaction is included in the next ledger
@@ -1614,12 +1710,14 @@ During the critical window between freeze submission and revocation execution, a
 In certain high-risk scenarios, administrators may choose to freeze vaults preemptively before a revocation decision is finalized:
 
 **When to Consider Preemptive Freezing:**
+
 - **Employment Termination Proceedings**: When an employee is under performance review or termination proceedings, freeze their vault to prevent front-running if termination occurs
 - **High-Value Vaults**: Vaults with extractable value exceeding a risk threshold (e.g., $100,000+)
 - **Suspicious Activity**: Beneficiaries who demonstrate mempool monitoring capability or unusual claim patterns
 - **Legal Disputes**: When a beneficiary is involved in legal disputes with the organization
 
 **Trade-offs of Preemptive Freezing:**
+
 - **Benefit**: Eliminates the freeze front-running window - the vault is already frozen when revocation is decided
 - **Cost**: Prevents legitimate claims by the beneficiary during the freeze period
 - **Legal Risk**: May be challenged as improper restriction of vested token access
@@ -1630,6 +1728,7 @@ In certain high-risk scenarios, administrators may choose to freeze vaults preem
 The timing of revocation relative to the vesting schedule significantly affects the extractable value:
 
 **Optimal Timing Strategies:**
+
 - **Revoke Early in Vesting Period**: Shortly after employment termination or contract breach, when few tokens have vested
   - Example: If termination occurs 6 months into a 4-year vesting schedule, only ~12.5% of tokens have vested
   - Lower extractable value reduces the beneficiary's incentive to front-run
@@ -1643,6 +1742,7 @@ The timing of revocation relative to the vesting schedule significantly affects 
   - This reduces the vault balance and extractable value
 
 **Timing Trade-offs:**
+
 - **Early Revocation**: Lower extractable value (lower risk) but may be perceived as unfair if termination is disputed
 - **Delayed Revocation**: Higher extractable value (higher risk) but may allow beneficiary to claim vested tokens they are entitled to
 - **Recommendation**: Revoke as soon as the decision is finalized and authorized, prioritizing security over timing optimization
@@ -1652,6 +1752,7 @@ The timing of revocation relative to the vesting schedule significantly affects 
 In many cases, off-chain coordination with the beneficiary can eliminate the adversarial scenario entirely:
 
 **Coordination Strategies:**
+
 - **Advance Notice**: Inform the beneficiary of the impending revocation and coordinate the timing
   - Beneficiary can claim vested tokens before revocation (if entitled)
   - Administrator can revoke unvested tokens without competition
@@ -1667,6 +1768,7 @@ In many cases, off-chain coordination with the beneficiary can eliminate the adv
   - Reduces the adversarial nature of revocations
 
 **When Off-Chain Coordination is Not Feasible:**
+
 - Adversarial terminations (e.g., termination for cause, legal disputes)
 - Beneficiaries who are unresponsive or uncooperative
 - Emergency revocations (e.g., security breaches, fraud)
@@ -1677,6 +1779,7 @@ In many cases, off-chain coordination with the beneficiary can eliminate the adv
 After completing the revocation, administrators should verify the outcome:
 
 **Verification Steps:**
+
 - **Confirm Revocation Success**: Query vault state to verify `released_amount = total_amount`
 - **Verify Token Transfer**: Confirm unvested tokens were transferred to administrator balance
 - **Check for Failed Claim Attempts**: Review transaction history for failed claim attempts during the freeze window
@@ -1692,18 +1795,21 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 **1. Policy-Based Controls**
 
 **Vesting Agreement Clauses:**
+
 - Include clauses in vesting agreements that address front-running behavior
   - Define front-running as a breach of contract
   - Specify penalties for front-running attempts (e.g., forfeiture of vested tokens, legal liability)
   - Require beneficiaries to acknowledge the clause and agree to cooperate during revocations
 
 **Revocation Authorization Procedures:**
+
 - Establish clear authorization requirements for revocations
   - Multi-signature approval for high-value revocations
   - Legal review for disputed revocations
   - Documentation requirements (termination letters, breach evidence)
 
 **Beneficiary Monitoring Policies:**
+
 - Implement policies for monitoring high-risk beneficiaries
   - Regular review of vault balances and claim patterns
   - Flagging beneficiaries with unusual activity
@@ -1712,18 +1818,21 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 **2. Governance-Based Controls**
 
 **Multi-Signature Revocation:**
+
 - Require multiple administrator signatures for revocation transactions
   - Reduces the risk of unauthorized or premature revocations
   - Provides additional review and oversight
   - Trade-off: Increases coordination complexity and time to execute
 
 **Revocation Review Board:**
+
 - Establish a review board that must approve revocations
   - Board reviews the justification, vault state, and risk assessment
   - Board authorizes the revocation and freeze procedure
   - Provides accountability and reduces arbitrary revocations
 
 **Time-Delayed Governance:**
+
 - Implement governance delays for revocation policy changes
   - Changes to revocation procedures must be announced in advance
   - Beneficiaries have time to review and respond to policy changes
@@ -1732,18 +1841,21 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 **3. Monitoring and Alerting Controls**
 
 **Vault Balance Monitoring:**
+
 - Implement automated monitoring of vault balances
   - Alert administrators when vault balances exceed risk thresholds
   - Track vesting progress and predict future extractable value
   - Prioritize high-value vaults for additional security measures
 
 **Mempool Monitoring:**
+
 - Deploy mempool monitoring infrastructure to detect claim transactions
   - Real-time alerts for claim transactions on monitored vaults
   - Automated response triggers (e.g., submit freeze transaction)
   - Historical analysis of claim patterns to identify suspicious behavior
 
 **Beneficiary Activity Monitoring:**
+
 - Track beneficiary claim patterns and account activity
   - Identify beneficiaries who claim regularly (lower risk)
   - Flag beneficiaries who never claim (higher risk - accumulated balance)
@@ -1752,18 +1864,21 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 **4. Legal and Compliance Controls**
 
 **Legal Agreements:**
+
 - Include front-running provisions in employment contracts or vesting agreements
   - Define front-running as a breach of contract
   - Specify remedies and penalties
   - Require beneficiaries to cooperate during revocations
 
 **Regulatory Compliance:**
+
 - Ensure revocation procedures comply with applicable regulations
   - Employment law requirements (e.g., notice periods, severance)
   - Securities regulations (if tokens are securities)
   - Data protection and privacy regulations
 
 **Dispute Resolution Procedures:**
+
 - Establish clear procedures for resolving revocation disputes
   - Mediation or arbitration clauses
   - Appeals process for beneficiaries
@@ -1772,12 +1887,14 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 **5. Insurance and Risk Transfer**
 
 **Revocation Insurance:**
+
 - Consider insurance products that cover losses from front-running attacks
   - Policies that reimburse the organization for extracted tokens
   - Coverage for legal costs related to front-running disputes
   - Trade-off: Insurance premiums vs. risk exposure
 
 **Risk Pooling:**
+
 - Participate in risk pooling arrangements with other organizations
   - Shared insurance or mutual aid agreements
   - Collective bargaining for better insurance terms
@@ -1788,18 +1905,21 @@ In scenarios where technical mitigations (vault freezing) are not available or n
 If the vault freezing mechanism is not available (e.g., older contract versions, technical issues), administrators must rely on alternative procedures:
 
 **Rapid Revocation Procedure:**
+
 - Submit revocation transaction with higher gas fee during surge pricing mode
   - Increases probability of inclusion in the current ledger
   - Does not guarantee execution order within the ledger (still ~50% probability)
   - Trade-off: Higher gas costs vs. slightly improved odds
 
 **Coordinated Revocation:**
+
 - Coordinate with beneficiary off-chain to avoid adversarial scenario
   - Negotiate timing of revocation
   - Allow beneficiary to claim vested tokens first (if entitled)
   - Reduces conflict and eliminates front-running risk
 
 **Accept the Risk:**
+
 - In low-value scenarios, accept the front-running risk as a cost of doing business
   - If extractable value is low (e.g., < $1,000), the risk may not justify complex procedures
   - Focus operational efforts on high-value revocations
@@ -1810,22 +1930,26 @@ If the vault freezing mechanism is not available (e.g., older contract versions,
 Effective mitigation of revocation front-running requires a layered defense strategy combining technical, operational, and administrative controls:
 
 **Layer 1: Technical Controls (Primary Defense)**
+
 - Vault freezing mechanism (freeze-then-revoke procedure)
 - Mempool monitoring and automated alerts
 
 **Layer 2: Operational Controls (Supporting Defense)**
+
 - Pre-revocation preparation and risk assessment
 - Proper freeze-then-revoke procedure execution
 - Timing optimization (revoke early, avoid high-risk windows)
 - Off-chain coordination when feasible
 
 **Layer 3: Administrative Controls (Governance and Policy)**
+
 - Vesting agreement clauses and legal protections
 - Multi-signature or governance-based revocation authorization
 - Beneficiary monitoring and risk-based prioritization
 - Compliance with legal and regulatory requirements
 
 **Layer 4: Risk Acceptance and Transfer**
+
 - Insurance or risk pooling for high-value scenarios
 - Accept risk for low-value scenarios where mitigation costs exceed potential losses
 
@@ -1853,12 +1977,14 @@ Safe token revocation requires a multi-step approach that combines technical cou
 Before initiating a token revocation, administrators should complete the following checklist to assess risk and prepare for safe execution:
 
 **1. Verify Revocation Authority and Justification**
+
 - [ ] Confirm that revocation is authorized according to the vesting agreement (e.g., employment termination, breach of contract)
 - [ ] Document the reason for revocation for audit and legal purposes
 - [ ] Verify that the vault is not marked as irrevocable (`is_irrevocable = false`)
 - [ ] Ensure the administrator account has the necessary permissions to execute `freeze_vault()` and `revoke_tokens()`
 
 **2. Assess Vault State and Risk Level**
+
 - [ ] Query the vault to determine current token balances:
   - Total allocated tokens (`total_amount`)
   - Tokens already claimed by beneficiary (`released_amount`)
@@ -1872,18 +1998,21 @@ Before initiating a token revocation, administrators should complete the followi
 - [ ] Review the beneficiary's claim history to identify patterns (frequent claims reduce risk)
 
 **3. Check Beneficiary Account Activity**
+
 - [ ] Monitor the beneficiary's account for recent transaction activity
 - [ ] Check if the beneficiary has submitted any transactions in the past 24 hours
 - [ ] Identify if the beneficiary is running automated monitoring software (frequent transaction submissions, mempool queries)
 - [ ] Note the beneficiary's typical transaction fee patterns (higher fees may indicate willingness to compete during surge pricing)
 
 **4. Assess Network Conditions**
+
 - [ ] Check current Stellar network status and ledger close times (target: ~5 seconds)
 - [ ] Verify if the network is in surge pricing mode (high transaction volume)
 - [ ] If surge pricing is active, consider waiting for normal operation or prepare to submit higher fees for the freeze transaction
 - [ ] Check mempool congestion levels to estimate transaction confirmation times
 
 **5. Prepare Transaction Parameters**
+
 - [ ] Identify the vault ID to be revoked
 - [ ] Prepare the freeze transaction: `freeze_vault(vault_id)`
 - [ ] Prepare the revocation transaction: `revoke_tokens(vault_id)`
@@ -1893,12 +2022,14 @@ Before initiating a token revocation, administrators should complete the followi
 - [ ] Configure transaction submission tools and ensure reliable network connectivity
 
 **6. Consider Off-Chain Coordination (High-Risk Scenarios)**
+
 - [ ] For high-value vaults (> $100,000), consider contacting the beneficiary off-chain before revocation
 - [ ] Negotiate a mutually agreed revocation time to avoid adversarial behavior
 - [ ] Document any agreements or communications for legal purposes
 - [ ] If coordination is not possible or appropriate, proceed with the standard procedure
 
 **7. Prepare Monitoring and Response Tools**
+
 - [ ] Set up mempool monitoring to observe pending transactions
 - [ ] Prepare scripts or tools to quickly query vault state after revocation
 - [ ] Ensure access to emergency response procedures in case front-running is detected
@@ -1911,6 +2042,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 **Phase 1: Freeze the Vault**
 
 **Step 1: Submit Freeze Transaction**
+
 - Submit the `freeze_vault(vault_id)` transaction to the Stellar network
 - Use appropriate transaction fees based on network conditions:
   - Normal operation: Standard fee (100 stroops)
@@ -1919,6 +2051,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 - **Critical**: Do NOT submit the revocation transaction yet
 
 **Step 2: Monitor Freeze Transaction Confirmation**
+
 - Monitor the mempool and ledger for the freeze transaction
 - Wait for the freeze transaction to be included in a closed ledger (typically 5-6 seconds)
 - Verify the transaction status: `SUCCESS` (not `FAILED` or `PENDING`)
@@ -1927,6 +2060,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
   - Do NOT proceed with revocation until the freeze issue is resolved
 
 **Step 3: Verify Vault is Frozen**
+
 - Query the vault state to confirm `is_frozen = true`
 - Verify the freeze timestamp matches the expected ledger close time
 - Check for any claim transactions submitted between freeze submission and confirmation:
@@ -1938,6 +2072,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 **Phase 2: Execute Revocation**
 
 **Step 4: Wait for Freeze Confirmation (Recommended Delay)**
+
 - After confirming the vault is frozen, wait an additional 10-30 seconds before submitting the revocation
 - This delay ensures:
   - The freeze state is propagated across all network nodes
@@ -1946,12 +2081,14 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 - During this delay, monitor for any attempted claim transactions (they should fail with "Vault is frozen")
 
 **Step 5: Submit Revocation Transaction**
+
 - Submit the `revoke_tokens(vault_id)` transaction to the Stellar network
 - Use standard transaction fees (the freeze provides protection, so fee competition is unnecessary)
 - Record the transaction hash and submission timestamp
 - **Note**: The revocation transaction is now visible in the mempool, but the vault is frozen, so the beneficiary cannot front-run
 
 **Step 6: Monitor Revocation Transaction Confirmation**
+
 - Monitor the mempool and ledger for the revocation transaction
 - Wait for the revocation transaction to be included in a closed ledger (typically 5-6 seconds)
 - Verify the transaction status: `SUCCESS` (not `FAILED` or `PENDING`)
@@ -1960,6 +2097,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
   - The vault remains frozen; you can retry the revocation or unfreeze the vault
 
 **Step 7: Verify Revocation Success**
+
 - Query the vault state to confirm the revocation was successful:
   - `released_amount` should equal `total_amount` (all tokens marked as released)
   - Administrator balance should have increased by the unvested token amount
@@ -1972,6 +2110,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 **Phase 3: Post-Revocation Actions**
 
 **Step 8: Decide Whether to Unfreeze the Vault**
+
 - Determine if the vault should remain frozen or be unfrozen:
   - **Keep Frozen**: If no vested tokens remain or if you want to prevent any future claims
   - **Unfreeze**: If vested tokens remain and the beneficiary should be allowed to claim them
@@ -1980,6 +2119,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 - **Note**: In most revocation scenarios, the vault can remain frozen indefinitely since all unvested tokens have been reclaimed
 
 **Step 9: Document the Revocation**
+
 - Record all transaction details in the organization's audit log:
   - Freeze transaction hash and timestamp
   - Revocation transaction hash and timestamp
@@ -1992,6 +2132,7 @@ Follow these steps in order to safely revoke tokens from a beneficiary's vault:
 - Update internal records to reflect the beneficiary's final token allocation
 
 **Step 10: Monitor for Post-Revocation Activity**
+
 - Continue monitoring the beneficiary's account for 24-48 hours after revocation
 - Watch for any attempted claim transactions (they should fail if the vault is frozen)
 - Check for any dispute or communication from the beneficiary
@@ -2067,32 +2208,38 @@ If any of the following anomalies are detected during monitoring, investigate im
 For high-value vaults (extractable value > $100,000) or situations where the beneficiary is known to have sophisticated monitoring capabilities, consider the following enhanced procedures:
 
 **1. Off-Chain Coordination**
+
 - Contact the beneficiary off-chain (email, phone, in-person meeting) before initiating revocation
 - Negotiate a mutually agreed revocation time and process
 - Obtain written acknowledgment of the revocation terms
 - If coordination is successful, the beneficiary is less likely to attempt front-running
 
 **2. Multi-Signature Authorization**
+
 - Use multi-signature authorization for freeze and revocation transactions to add an additional layer of security
 - Require approval from multiple administrators before executing the procedure
 - This reduces the risk of unauthorized or premature revocation
 
 **3. Timing Optimization**
+
 - Execute the revocation during off-peak hours (e.g., late night, weekends) when network activity is lower
 - Avoid executing during known high-traffic periods (e.g., major token launches, network upgrades)
 - Lower network congestion reduces the likelihood of surge pricing and fee competition
 
 **4. Redundant Monitoring**
+
 - Deploy multiple independent monitoring systems to observe mempool activity
 - Use both on-chain and off-chain monitoring tools to detect attempted front-running
 - Set up automated alerts for any claim transactions targeting the vault
 
 **5. Legal Preparation**
+
 - Consult legal counsel before initiating revocation for high-value vaults
 - Prepare documentation of the revocation justification and authorization
 - Be ready to defend the revocation in case of legal disputes
 
 **6. Staged Revocation (If Applicable)**
+
 - If the contract supports partial revocation, consider revoking tokens in multiple stages
 - This reduces the extractable value in any single revocation event
 - However, this approach increases operational complexity and may not be suitable for all scenarios
@@ -2100,36 +2247,43 @@ For high-value vaults (extractable value > $100,000) or situations where the ben
 #### Common Mistakes to Avoid
 
 **1. Submitting Freeze and Revocation Simultaneously**
+
 - **Mistake**: Submitting both transactions in the same ledger or without waiting for freeze confirmation
 - **Consequence**: The race condition still exists; the beneficiary can front-run if their claim executes before the freeze
 - **Solution**: Always wait for freeze confirmation before submitting the revocation
 
 **2. Not Verifying Freeze Success**
+
 - **Mistake**: Assuming the freeze transaction succeeded without querying the vault state
 - **Consequence**: The vault may not be frozen, allowing the beneficiary to claim tokens
 - **Solution**: Always query the vault state to confirm `is_frozen = true` before proceeding
 
 **3. Using Insufficient Transaction Fees During Surge Pricing**
+
 - **Mistake**: Submitting the freeze transaction with standard fees during network congestion
 - **Consequence**: The freeze transaction may be delayed, giving the beneficiary more time to front-run
 - **Solution**: Monitor network conditions and use higher fees during surge pricing to ensure timely freeze confirmation
 
 **4. Revoking Without Assessing Risk**
+
 - **Mistake**: Executing revocation without checking the vault's vested token balance or extractable value
 - **Consequence**: Unnecessary risk exposure or wasted effort on low-risk vaults
 - **Solution**: Always complete the pre-revocation checklist to assess risk and prioritize high-risk vaults
 
 **5. Not Monitoring Post-Revocation Activity**
+
 - **Mistake**: Assuming the revocation was successful without verifying the final vault state
 - **Consequence**: Missing evidence of attempted front-running or failing to detect revocation failures
 - **Solution**: Follow the post-revocation monitoring procedures for at least 24 hours
 
 **6. Unfreezing the Vault Prematurely**
+
 - **Mistake**: Unfreezing the vault immediately after revocation without considering whether vested tokens remain
 - **Consequence**: The beneficiary can claim remaining vested tokens, which may not be intended
 - **Solution**: Carefully decide whether to unfreeze based on the organization's policy and the vault's remaining balance
 
 **7. Not Documenting the Revocation**
+
 - **Mistake**: Failing to record transaction details and revocation justification
 - **Consequence**: Lack of audit trail for compliance, disputes, or legal proceedings
 - **Solution**: Maintain comprehensive documentation of all revocation activities
@@ -2171,6 +2325,7 @@ Before initiating a token revocation, administrators should monitor the benefici
 Monitor the beneficiary's account for recent transaction activity to assess their engagement level with the blockchain:
 
 **Low Activity (Low Risk)**
+
 - No transactions in the past 7 days
 - Infrequent historical transactions (less than 1 per week)
 - Long gaps between transactions
@@ -2178,6 +2333,7 @@ Monitor the beneficiary's account for recent transaction activity to assess thei
 - **Recommendation**: Standard revocation procedure with freeze-then-revoke pattern is sufficient
 
 **Moderate Activity (Medium Risk)**
+
 - 1-5 transactions in the past 7 days
 - Regular but not constant transaction activity
 - Transactions occur during business hours or predictable times
@@ -2185,6 +2341,7 @@ Monitor the beneficiary's account for recent transaction activity to assess thei
 - **Recommendation**: Execute revocation during off-hours (nights, weekends) when beneficiary is less likely to be monitoring
 
 **High Activity (High Risk)**
+
 - Daily or multiple daily transactions
 - Transactions at irregular hours (24/7 activity)
 - Very short time intervals between transactions (minutes or seconds)
@@ -2196,12 +2353,14 @@ Monitor the beneficiary's account for recent transaction activity to assess thei
 Examine the types of transactions the beneficiary is submitting to understand their blockchain sophistication:
 
 **Simple Transactions (Lower Risk)**
+
 - Basic token transfers
 - Standard claim operations
 - Infrequent contract interactions
 - **Interpretation**: Beneficiary is using basic wallet functionality and may not have advanced monitoring capabilities
 
 **Complex Transactions (Higher Risk)**
+
 - Smart contract interactions beyond basic claims
 - Multi-operation transactions (batched operations)
 - Transactions with custom memos or data fields
@@ -2213,11 +2372,13 @@ Examine the types of transactions the beneficiary is submitting to understand th
 Analyze the fees the beneficiary pays for transactions to assess their willingness to compete during surge pricing:
 
 **Standard Fees (Lower Risk)**
+
 - Consistent use of minimum or standard transaction fees (100 stroops)
 - No variation in fee amounts across transactions
 - **Interpretation**: Beneficiary is cost-conscious and may not be willing to pay premium fees to front-run
 
 **Variable or High Fees (Higher Risk)**
+
 - Frequent use of fees above the standard minimum
 - Fee amounts vary based on network conditions
 - Willingness to pay 2-10x standard fees during congestion
@@ -2228,18 +2389,21 @@ Analyze the fees the beneficiary pays for transactions to assess their willingne
 Review the beneficiary's historical claim transactions from their vesting vault:
 
 **Regular Claims (Lower Risk)**
+
 - Beneficiary claims vested tokens regularly (weekly, monthly)
 - Vault balance is typically low due to frequent claims
 - Predictable claim patterns
 - **Interpretation**: Regular claims reduce the extractable value in the vault, lowering front-running incentive
 
 **Infrequent Claims (Higher Risk)**
+
 - Beneficiary rarely claims vested tokens
 - Large vested token balance has accumulated in the vault
 - No claims in the past 30+ days
 - **Interpretation**: High extractable value creates strong incentive for front-running
 
 **No Claims (Highest Risk)**
+
 - Beneficiary has never claimed tokens despite vesting
 - Maximum vested token balance in the vault
 - **Interpretation**: Beneficiary may be waiting for a specific event (e.g., price peak, revocation attempt) to claim all tokens at once
@@ -2249,18 +2413,21 @@ Review the beneficiary's historical claim transactions from their vesting vault:
 Attempt to identify whether the beneficiary has mempool monitoring infrastructure:
 
 **Indicators of Mempool Monitoring**
+
 - Transactions submitted immediately after specific on-chain events (within seconds)
 - Transactions that appear to respond to pending transactions in the mempool
 - Use of advanced transaction features (sequence numbers, time bounds) that suggest automation
 - Transactions submitted from multiple addresses in coordinated patterns
 
 **Detection Methods**
+
 - Review historical transaction timestamps for patterns of rapid response to on-chain events
 - Check if the beneficiary has submitted transactions that competed with other pending transactions
 - Look for evidence of automated transaction submission (consistent timing, identical transaction structures)
 - Search for public information about the beneficiary's technical background or blockchain involvement
 
 **If Mempool Monitoring is Detected**
+
 - **High Risk**: Beneficiary is likely capable of detecting and responding to pending revocation transactions
 - **Recommendation**: Strongly consider off-chain coordination or execute revocation with maximum security measures (freeze-then-revoke with minimal delay)
 
@@ -2269,18 +2436,21 @@ Attempt to identify whether the beneficiary has mempool monitoring infrastructur
 Supplement on-chain monitoring with off-chain information sources:
 
 **Public Information Sources**
+
 - Social media profiles (Twitter, LinkedIn, GitHub) to assess technical sophistication
 - Public statements or posts about blockchain monitoring, MEV, or front-running
 - Participation in blockchain communities or developer forums
 - Employment history or technical background (e.g., blockchain developer, trader, security researcher)
 
 **Internal Information Sources**
+
 - HR records indicating technical skills or blockchain experience
 - IT department logs showing access to blockchain monitoring tools or services
 - Previous interactions with the organization regarding vesting or token claims
 - Legal or compliance records indicating disputes or adversarial behavior
 
 **Privacy and Legal Considerations**
+
 - Ensure all monitoring activities comply with privacy laws and regulations (GDPR, CCPA, etc.)
 - Only collect information that is necessary for security purposes
 - Document the legal basis for monitoring (e.g., legitimate interest in protecting organizational assets)
@@ -2295,6 +2465,7 @@ During the revocation process (from freeze submission to revocation confirmation
 If mempool monitoring tools are available, watch for any transactions submitted by the beneficiary during the critical window:
 
 **Critical Window Timeline**
+
 - **T=0**: Administrator submits freeze transaction
 - **T=0 to T=5 seconds**: Freeze transaction is pending in mempool (vulnerable window)
 - **T=5 seconds**: Freeze transaction confirmed in ledger (vault is now frozen)
@@ -2304,11 +2475,13 @@ If mempool monitoring tools are available, watch for any transactions submitted 
 - **T=40 seconds**: Revocation transaction confirmed in ledger
 
 **What to Watch For**
+
 - Any `claim_tokens()` transactions submitted by the beneficiary during the T=0 to T=5 window
 - Transactions with higher fees than the freeze transaction (indicates fee competition)
 - Multiple claim attempts in rapid succession (indicates automated response)
 
 **Response Actions**
+
 - If a claim transaction is detected before freeze confirmation (T=0 to T=5):
   - **Do NOT panic** - the freeze may still execute first due to pseudo-random ordering
   - Monitor which transaction executes first in the ledger
@@ -2324,12 +2497,14 @@ If mempool monitoring tools are available, watch for any transactions submitted 
 Monitor the Stellar ledger in real-time to verify transaction inclusion and execution order:
 
 **Tools and Methods**
+
 - Use Stellar Horizon API to query recent ledgers and transactions
 - Subscribe to ledger close events via WebSocket or streaming endpoints
 - Use blockchain explorers (e.g., StellarExpert, Stellar.Expert) for visual monitoring
 - Set up automated alerts for transactions involving the target vault
 
 **Key Metrics to Track**
+
 - Ledger close times (should be ~5 seconds)
 - Transaction inclusion status (pending, confirmed, failed)
 - Execution order of freeze, claim, and revocation transactions
@@ -2340,11 +2515,13 @@ Monitor the Stellar ledger in real-time to verify transaction inclusion and exec
 Continuously query the vault state during the revocation process to detect unexpected changes:
 
 **State Checkpoints**
+
 - **Before Freeze**: Record initial vault state (vested amount, released amount, is_frozen status)
 - **After Freeze Confirmation**: Verify `is_frozen = true` and no change in released amount
 - **After Revocation Confirmation**: Verify `released_amount = total_amount` and tokens transferred to administrator
 
 **Anomaly Detection**
+
 - If `released_amount` increases between freeze submission and freeze confirmation: A claim transaction executed before the freeze
 - If `is_frozen` does not change to `true` after freeze confirmation: Freeze transaction failed
 - If `released_amount` does not equal `total_amount` after revocation: Revocation transaction failed or was partial
@@ -2354,6 +2531,7 @@ Continuously query the vault state during the revocation process to detect unexp
 Set up automated alerts to notify administrators of critical events during revocation:
 
 **Alert Triggers**
+
 - Beneficiary submits any transaction during the critical window
 - Freeze transaction fails or is delayed beyond expected confirmation time
 - Claim transaction is detected in the mempool before freeze confirmation
@@ -2361,6 +2539,7 @@ Set up automated alerts to notify administrators of critical events during revoc
 - Revocation transaction fails or is delayed
 
 **Alert Channels**
+
 - Email notifications to security team
 - SMS or push notifications for high-priority alerts
 - Slack or other team communication tools
@@ -2375,11 +2554,13 @@ After the revocation is complete, continue monitoring for 24-48 hours to detect 
 Monitor for any claim transactions submitted by the beneficiary after the vault is frozen:
 
 **What to Look For**
+
 - `claim_tokens()` transactions that fail with "Vault is frozen" error
 - Multiple failed claim attempts in rapid succession
 - Claim attempts with varying fee amounts (indicates desperation or testing)
 
 **Interpretation**
+
 - Failed claim attempts indicate the beneficiary attempted to front-run but was blocked by the freeze
 - Multiple attempts suggest automated monitoring software was running
 - Document all failed attempts for audit purposes and potential legal proceedings
@@ -2389,17 +2570,20 @@ Monitor for any claim transactions submitted by the beneficiary after the vault 
 Watch for signs that the beneficiary may dispute the revocation:
 
 **On-Chain Indicators**
+
 - Transactions attempting to interact with the vault in unusual ways
 - Transactions with custom memos or data fields that may contain dispute messages
 - Attempts to call administrative functions (will fail due to authorization checks)
 
 **Off-Chain Indicators**
+
 - Communication from the beneficiary questioning the revocation
 - Legal notices or formal dispute filings
 - Social media posts or public statements about the revocation
 - Contact with regulatory authorities or blockchain governance bodies
 
 **Response Actions**
+
 - Document all dispute indicators and preserve evidence
 - Consult legal counsel before responding to disputes
 - Prepare transaction evidence (hashes, timestamps, vault state snapshots) for potential legal proceedings
@@ -2410,6 +2594,7 @@ Watch for signs that the beneficiary may dispute the revocation:
 Finalize the monitoring documentation for compliance and audit purposes:
 
 **Required Documentation**
+
 - Pre-revocation monitoring summary (beneficiary activity patterns, risk assessment)
 - Real-time monitoring logs (mempool observations, ledger events, vault state changes)
 - Post-revocation monitoring summary (failed claim attempts, dispute indicators)
@@ -2417,6 +2602,7 @@ Finalize the monitoring documentation for compliance and audit purposes:
 - Decision rationale (why revocation was necessary, why specific timing was chosen)
 
 **Retention and Access**
+
 - Store monitoring documentation in secure, tamper-proof storage
 - Ensure documentation is accessible to legal, compliance, and audit teams
 - Retain documentation for the period required by organizational policy and legal regulations
@@ -2429,11 +2615,13 @@ To effectively monitor beneficiary activity and detect front-running attempts, a
 **1. Blockchain Monitoring Services**
 
 **Commercial Services**
+
 - Blockchain analytics platforms (e.g., Chainalysis, Elliptic, TRM Labs) for transaction tracking
 - Mempool monitoring services (if available for Stellar/Soroban)
 - Real-time alerting services for on-chain events
 
 **Open-Source Tools**
+
 - Stellar Horizon API for querying ledgers and transactions
 - Custom scripts using Stellar SDK (JavaScript, Python, Rust) for automated monitoring
 - Blockchain explorers (StellarExpert, Stellar.Expert) for manual monitoring
@@ -2443,24 +2631,25 @@ To effectively monitor beneficiary activity and detect front-running attempts, a
 Develop custom scripts to automate monitoring tasks:
 
 **Pre-Revocation Monitoring Script**
+
 ```python
 ### Pseudocode example for monitoring beneficiary activity
 def monitor_beneficiary_activity(beneficiary_address, days=7):
     transactions = fetch_transactions(beneficiary_address, days)
-    
+
     # Analyze transaction frequency
     frequency = len(transactions) / days
-    
+
     # Analyze transaction types
     complex_tx_count = count_complex_transactions(transactions)
-    
+
     # Analyze fee patterns
     avg_fee = calculate_average_fee(transactions)
     max_fee = calculate_max_fee(transactions)
-    
+
     # Generate risk assessment
     risk_level = assess_risk(frequency, complex_tx_count, avg_fee, max_fee)
-    
+
     return {
         "frequency": frequency,
         "risk_level": risk_level,
@@ -2469,26 +2658,27 @@ def monitor_beneficiary_activity(beneficiary_address, days=7):
 ```
 
 **Real-Time Monitoring Script**
+
 ```python
 ### Pseudocode example for real-time monitoring
 def monitor_revocation_process(vault_id, beneficiary_address):
     # Subscribe to ledger close events
     subscribe_to_ledger_events()
-    
+
     # Monitor for beneficiary transactions
     while revocation_in_progress:
         pending_txs = fetch_mempool_transactions(beneficiary_address)
-        
+
         for tx in pending_txs:
             if is_claim_transaction(tx, vault_id):
                 alert("Claim transaction detected in mempool!")
                 log_transaction(tx)
-        
+
         # Check vault state
         vault_state = fetch_vault_state(vault_id)
         if vault_state_changed_unexpectedly(vault_state):
             alert("Vault state changed unexpectedly!")
-        
+
         sleep(1)  # Check every second
 ```
 
@@ -2497,12 +2687,14 @@ def monitor_revocation_process(vault_id, beneficiary_address):
 Set up automated alerting to notify administrators of critical events:
 
 **Alert Configuration**
+
 - Define alert severity levels (info, warning, critical)
 - Configure notification channels (email, SMS, Slack, PagerDuty)
 - Set up escalation policies for unacknowledged alerts
 - Implement rate limiting to prevent alert fatigue
 
 **Alert Types**
+
 - **Info**: Beneficiary submitted a transaction (routine activity)
 - **Warning**: Beneficiary submitted a claim transaction during monitoring period
 - **Critical**: Claim transaction detected in mempool during freeze-to-revocation window
@@ -2512,6 +2704,7 @@ Set up automated alerting to notify administrators of critical events:
 Create a monitoring dashboard for real-time visibility:
 
 **Dashboard Components**
+
 - Beneficiary activity timeline (transaction history, frequency chart)
 - Vault state display (vested amount, unvested amount, freeze status)
 - Real-time transaction feed (pending and confirmed transactions)
@@ -2519,6 +2712,7 @@ Create a monitoring dashboard for real-time visibility:
 - Alert history and status
 
 **Dashboard Tools**
+
 - Grafana or Kibana for visualization
 - Custom web dashboard using Stellar SDK and charting libraries
 - Blockchain explorer integrations for quick reference
@@ -2532,21 +2726,25 @@ For high-risk revocations or situations where off-chain coordination is appropri
 Off-chain coordination (communicating with the beneficiary before revocation) may be appropriate in the following scenarios:
 
 **High-Value Vaults**
+
 - Extractable value exceeds $100,000
 - Potential legal or reputational consequences of adversarial revocation
 - Organization prefers cooperative approach to minimize conflict
 
 **Sophisticated Beneficiaries**
+
 - Beneficiary has demonstrated technical sophistication (blockchain developer, trader, security researcher)
 - Evidence of mempool monitoring capability
 - History of adversarial behavior or disputes with the organization
 
 **Legal or Compliance Requirements**
+
 - Vesting agreement requires notice before revocation
 - Regulatory requirements mandate beneficiary notification
 - Employment law requires advance notice of benefit changes
 
 **Organizational Policy**
+
 - Company culture emphasizes transparency and cooperation
 - HR policy requires communication before terminating benefits
 - Risk management policy prioritizes dispute avoidance over surprise revocations
@@ -2556,16 +2754,19 @@ Off-chain coordination (communicating with the beneficiary before revocation) ma
 Choose communication methods based on urgency, formality, and documentation requirements:
 
 **Formal Written Communication**
+
 - **Email**: Provides written record, suitable for most scenarios
 - **Registered Mail**: Provides proof of delivery, suitable for legal requirements
 - **Legal Notice**: Formal notification through legal counsel, suitable for disputes
 
 **Informal Communication**
+
 - **Phone Call**: Allows real-time discussion, suitable for cooperative beneficiaries
 - **Video Conference**: Enables face-to-face conversation, suitable for complex situations
 - **In-Person Meeting**: Highest level of engagement, suitable for high-value or sensitive revocations
 
 **Communication Timing**
+
 - **Advance Notice**: Notify beneficiary days or weeks before revocation (suitable for cooperative scenarios)
 - **Same-Day Notice**: Notify beneficiary hours before revocation (suitable for time-sensitive scenarios)
 - **Immediate Notice**: Notify beneficiary minutes before revocation (suitable for emergency scenarios)
@@ -2575,6 +2776,7 @@ Choose communication methods based on urgency, formality, and documentation requ
 When coordinating with the beneficiary, consider the following negotiation approaches:
 
 **Cooperative Approach**
+
 - Explain the reason for revocation (e.g., employment termination, contract breach)
 - Acknowledge the beneficiary's right to claim vested tokens
 - Propose a mutually agreed revocation time (e.g., "We will revoke unvested tokens at 3:00 PM today")
@@ -2582,11 +2784,13 @@ When coordinating with the beneficiary, consider the following negotiation appro
 - Document the agreement in writing
 
 **Incentivized Approach**
+
 - Offer the beneficiary an incentive to cooperate (e.g., extended claim period, partial vested token retention)
 - Negotiate a settlement that avoids adversarial behavior
 - Use financial incentives to align interests (e.g., "If you agree not to front-run, we will allow you to claim vested tokens over the next 30 days")
 
 **Firm Approach**
+
 - Clearly state the organization's intent to revoke unvested tokens
 - Inform the beneficiary that the vault will be frozen to prevent front-running
 - Emphasize that vested tokens will remain claimable after revocation (if applicable)
@@ -2597,6 +2801,7 @@ When coordinating with the beneficiary, consider the following negotiation appro
 Document all off-chain coordination activities for legal and compliance purposes:
 
 **Required Documentation**
+
 - Communication records (emails, call logs, meeting notes)
 - Agreements or acknowledgments from the beneficiary
 - Timestamps of all communications
@@ -2604,6 +2809,7 @@ Document all off-chain coordination activities for legal and compliance purposes
 - Summary of negotiation outcomes
 
 **Legal Considerations**
+
 - Ensure all communications comply with employment law and contract terms
 - Avoid making promises or commitments that are not authorized
 - Consult legal counsel before making binding agreements
@@ -2614,21 +2820,25 @@ Document all off-chain coordination activities for legal and compliance purposes
 Off-chain coordination is not appropriate in all scenarios. Avoid coordination in the following situations:
 
 **Adversarial Beneficiaries**
+
 - Beneficiary has a history of disputes or adversarial behavior
 - Beneficiary has threatened legal action or made hostile statements
 - Beneficiary is unresponsive or refuses to communicate
 
 **Time-Sensitive Revocations**
+
 - Immediate revocation is required due to security concerns (e.g., beneficiary is suspected of fraud)
 - Legal or regulatory requirements mandate immediate action
 - Delay would significantly increase risk or financial exposure
 
 **Confidentiality Requirements**
+
 - Revocation is part of a confidential investigation
 - Disclosure to the beneficiary would compromise security or legal proceedings
 - Organizational policy prohibits advance notice
 
 **Operational Efficiency**
+
 - Low-value vaults where coordination overhead is not justified
 - Routine revocations where standard procedures are sufficient
 - Beneficiary is unlikely to front-run based on monitoring assessment
@@ -2645,6 +2855,7 @@ Effective monitoring and coordination strategies enable administrators to:
 - **Document thoroughly** by maintaining comprehensive audit trails for compliance and dispute resolution
 
 **Key Recommendations**:
+
 1. **Always monitor beneficiary activity for 24-48 hours before revocation** to establish a baseline and assess risk
 2. **Use real-time monitoring during the freeze-to-revocation window** to detect attempted front-running
 3. **Consider off-chain coordination for high-value vaults or sophisticated beneficiaries** to minimize conflict
@@ -2662,31 +2873,37 @@ This section provides procedures for responding to detected or suspected front-r
 Emergency response procedures should be activated when any of the following conditions are detected:
 
 **1. Successful Front-Running (Claim Before Freeze)**
+
 - A beneficiary's claim transaction executes before the administrator's freeze transaction
 - Vested tokens are extracted from the vault before the revocation can be completed
 - The vault's `released_amount` increases between freeze submission and freeze confirmation
 
 **2. Freeze Transaction Failure**
+
 - The freeze transaction fails unexpectedly (e.g., due to authorization issues, vault state problems)
 - The freeze transaction is delayed beyond the expected confirmation time (>10 seconds)
 - The vault remains unfrozen (`is_frozen = false`) after freeze transaction submission
 
 **3. Revocation Transaction Failure**
+
 - The revocation transaction fails unexpectedly after the vault is frozen
 - The revocation transaction is delayed or stuck in the mempool
 - The vault state does not update as expected after revocation submission
 
 **4. Unexpected Vault State Changes**
+
 - The vault's `released_amount` changes unexpectedly during the revocation process
 - The vault's `is_frozen` status changes without administrator action
 - Tokens are transferred from the vault to unexpected addresses
 
 **5. Multiple Rapid Claim Attempts**
+
 - The beneficiary submits multiple claim transactions in rapid succession (indicates automated front-running)
 - Claim transactions with escalating fees (indicates fee competition during surge pricing)
 - Claim transactions submitted within seconds of freeze transaction submission
 
 **6. Mempool Manipulation or Anomalies**
+
 - Evidence of unusual mempool activity (e.g., transaction reordering, delayed inclusion)
 - Transactions with suspicious parameters (e.g., unusual time bounds, sequence numbers)
 - Coordinated activity from multiple addresses targeting the same vault
@@ -2698,6 +2915,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 **Phase 1: Immediate Assessment (First 60 Seconds)**
 
 **Step 1: Confirm the Emergency**
+
 - Verify that an emergency condition has actually occurred (not a false alarm)
 - Query the vault state to determine the current status:
   - `is_frozen` status
@@ -2707,6 +2925,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 - Review recent ledger transactions to identify what executed and in what order
 
 **Step 2: Identify the Emergency Type**
+
 - Determine which emergency condition has occurred (see list above)
 - Assess the severity:
   - **Critical**: Tokens have been extracted by the beneficiary (successful front-running)
@@ -2715,6 +2934,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
   - **Low**: Failed claim attempts after freeze (no action needed, monitoring only)
 
 **Step 3: Alert the Response Team**
+
 - Notify the security team, legal counsel, and relevant stakeholders immediately
 - Provide a brief summary of the emergency condition
 - Activate the incident response protocol
@@ -2723,6 +2943,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 **Phase 2: Containment (First 5 Minutes)**
 
 **Step 4: Attempt to Freeze the Vault (If Not Already Frozen)**
+
 - If the vault is not frozen and tokens remain at risk, immediately submit a freeze transaction
 - Use higher transaction fees to prioritize inclusion during surge pricing
 - Monitor the freeze transaction for confirmation
@@ -2732,11 +2953,13 @@ When emergency conditions are detected, follow these procedures to minimize dama
   - Vault may not exist or may be in an invalid state
 
 **Step 5: Halt Further Revocation Attempts**
+
 - Do NOT submit the revocation transaction if the vault is not frozen
 - Cancel any pending revocation transactions if possible (may not be possible once submitted)
 - Reassess the situation before proceeding with revocation
 
 **Step 6: Document the Incident**
+
 - Record all transaction hashes, timestamps, and vault state snapshots
 - Capture mempool logs if available
 - Screenshot blockchain explorer pages showing the transaction sequence
@@ -2745,6 +2968,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 **Phase 3: Analysis and Response (First 30 Minutes)**
 
 **Step 7: Analyze What Happened**
+
 - Reconstruct the sequence of events:
   - When was the freeze transaction submitted?
   - When was the claim transaction submitted?
@@ -2757,6 +2981,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
   - Was the beneficiary running automated monitoring software?
 
 **Step 8: Quantify the Impact**
+
 - Calculate the amount of tokens extracted by the beneficiary:
   - `Extracted_Tokens = Released_Amount_After - Released_Amount_Before`
 - Calculate the financial impact:
@@ -2767,9 +2992,11 @@ When emergency conditions are detected, follow these procedures to minimize dama
 - Assess whether further revocation is still necessary and feasible
 
 **Step 9: Decide on Next Steps**
+
 - Based on the analysis, choose one of the following response paths:
 
 **Response Path A: Successful Front-Running (Tokens Extracted)**
+
 - The beneficiary successfully claimed vested tokens before the freeze
 - **Action**: Proceed with revoking the remaining unvested tokens (if any)
 - **Action**: Freeze the vault to prevent further claims
@@ -2777,6 +3004,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 - **Action**: Document the incident for audit and potential legal proceedings
 
 **Response Path B: Freeze Failed, Vault Still Vulnerable**
+
 - The freeze transaction failed and the vault is still unfrozen
 - **Action**: Investigate the cause of the freeze failure
 - **Action**: Retry the freeze transaction with corrected parameters
@@ -2784,6 +3012,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 - **Action**: Do NOT proceed with revocation until the vault is frozen
 
 **Response Path C: Revocation Failed After Freeze**
+
 - The vault is frozen but the revocation transaction failed
 - **Action**: Investigate the cause of the revocation failure
 - **Action**: Retry the revocation transaction with corrected parameters
@@ -2791,6 +3020,7 @@ When emergency conditions are detected, follow these procedures to minimize dama
 - **Action**: Document the failure and retry until successful
 
 **Response Path D: False Alarm (No Actual Emergency)**
+
 - The detected condition was a false alarm or monitoring error
 - **Action**: Verify the vault state and confirm no tokens were extracted
 - **Action**: Proceed with the standard revocation procedure
@@ -2804,33 +3034,39 @@ If the beneficiary successfully extracted tokens through front-running, consult 
 
 **Legal Theories for Recovery**
 
-*Breach of Contract*
+_Breach of Contract_
+
 - If the vesting agreement includes clauses prohibiting front-running or requiring cooperation during revocation
 - If the beneficiary's actions violated the terms of the employment contract or vesting agreement
 - Potential remedy: Return of extracted tokens, damages for breach
 
-*Breach of Fiduciary Duty*
+_Breach of Fiduciary Duty_
+
 - If the beneficiary was an employee or officer with fiduciary duties to the organization
 - If the front-running constitutes a breach of loyalty or good faith
 - Potential remedy: Disgorgement of profits, damages
 
-*Unjust Enrichment*
+_Unjust Enrichment_
+
 - If the beneficiary's extraction of tokens was inequitable or contrary to the parties' understanding
 - If the beneficiary exploited a technical vulnerability in bad faith
 - Potential remedy: Restitution of the unjust gain
 
-*Fraud or Misrepresentation*
+_Fraud or Misrepresentation_
+
 - If the beneficiary made false statements or concealed their intent to front-run
 - If the beneficiary's actions constitute fraudulent conduct
 - Potential remedy: Rescission, damages, punitive damages
 
 **Practical Considerations**
+
 - Legal action may be costly and time-consuming
 - Recovery may be difficult if the beneficiary has transferred or sold the tokens
 - Reputational impact of legal disputes should be considered
 - Settlement negotiations may be more efficient than litigation
 
 **Evidence Preservation**
+
 - Preserve all transaction records, mempool logs, and vault state snapshots
 - Document the timeline of events with precise timestamps
 - Collect any communications with the beneficiary (emails, messages, calls)
@@ -2841,18 +3077,21 @@ If the beneficiary successfully extracted tokens through front-running, consult 
 Notify relevant stakeholders about the incident and response actions:
 
 **Internal Stakeholders**
+
 - Executive leadership (CEO, CFO, General Counsel)
 - Finance team (for accounting and financial impact assessment)
 - HR team (if the beneficiary is a current or former employee)
 - IT/Security team (for technical analysis and prevention measures)
 
 **External Stakeholders (If Applicable)**
+
 - Legal counsel (for recovery options and legal strategy)
 - Auditors (if the incident affects financial statements or compliance)
 - Regulators (if required by law or regulation)
 - Insurance providers (if the organization has cyber insurance or fidelity bonds)
 
 **Communication Guidelines**
+
 - Provide factual, objective information about the incident
 - Avoid speculation or blame until the analysis is complete
 - Emphasize the response actions taken to contain and resolve the incident
@@ -2863,6 +3102,7 @@ Notify relevant stakeholders about the incident and response actions:
 If unvested tokens remain in the vault after the front-running incident, complete the revocation:
 
 **Revocation After Front-Running**
+
 - Verify the vault is frozen (`is_frozen = true`)
 - Submit the revocation transaction to reclaim remaining unvested tokens
 - Monitor the revocation transaction for confirmation
@@ -2870,6 +3110,7 @@ If unvested tokens remain in the vault after the front-running incident, complet
 - Document the completed revocation
 
 **If Revocation is No Longer Necessary**
+
 - If all tokens have been extracted or if the organization decides not to proceed with revocation
 - Document the decision and rationale
 - Consider whether to unfreeze the vault or leave it frozen
@@ -2882,6 +3123,7 @@ If unvested tokens remain in the vault after the front-running incident, complet
 After the immediate response is complete, conduct a thorough post-incident analysis:
 
 **Analysis Questions**
+
 - What was the root cause of the incident?
 - Could the incident have been prevented? If so, how?
 - Were the emergency response procedures effective?
@@ -2889,6 +3131,7 @@ After the immediate response is complete, conduct a thorough post-incident analy
 - Are there technical or operational improvements that should be implemented?
 
 **Analysis Deliverables**
+
 - Detailed incident timeline with all events and transactions
 - Root cause analysis report
 - Impact assessment (financial, operational, reputational)
@@ -2900,18 +3143,21 @@ After the immediate response is complete, conduct a thorough post-incident analy
 Based on the post-incident analysis, implement measures to prevent future front-running incidents:
 
 **Technical Improvements**
+
 - Enhance monitoring systems to detect front-running attempts earlier
 - Implement automated freeze-then-revoke workflows to reduce human error
 - Deploy mempool monitoring tools to observe pending transactions in real-time
 - Improve transaction fee management during surge pricing
 
 **Operational Improvements**
+
 - Update revocation procedures to incorporate lessons learned
 - Provide additional training to administrators on front-running risks
 - Establish clearer guidelines for when to use off-chain coordination
 - Improve communication protocols between security, legal, and operations teams
 
 **Policy Improvements**
+
 - Update vesting agreements to include explicit anti-front-running clauses
 - Establish clear policies for legal action in response to front-running
 - Define escalation procedures for high-risk revocations
@@ -2922,12 +3168,14 @@ Based on the post-incident analysis, implement measures to prevent future front-
 Update security documentation and training materials based on the incident:
 
 **Documentation Updates**
+
 - Add the incident as a case study in the SECURITY.md file (anonymized if necessary)
 - Update emergency response procedures based on lessons learned
 - Document new preventive measures and their implementation
 - Update risk assessment guidelines to reflect new threat intelligence
 
 **Training Updates**
+
 - Conduct training sessions for administrators on the incident and lessons learned
 - Update training materials to include the new procedures and preventive measures
 - Conduct tabletop exercises or simulations to practice emergency response
@@ -2938,30 +3186,35 @@ Update security documentation and training materials based on the incident:
 Use this checklist during an emergency to ensure all critical steps are completed:
 
 **Immediate Assessment (First 60 Seconds)**
+
 - [ ] Confirm the emergency condition has occurred
 - [ ] Query vault state and verify current status
 - [ ] Identify the emergency type and assess severity
 - [ ] Alert the response team and activate incident response protocol
 
 **Containment (First 5 Minutes)**
+
 - [ ] Attempt to freeze the vault if not already frozen
 - [ ] Halt further revocation attempts until situation is assessed
 - [ ] Document the incident with transaction hashes and timestamps
 - [ ] Preserve all evidence for potential legal proceedings
 
 **Analysis and Response (First 30 Minutes)**
+
 - [ ] Reconstruct the sequence of events and identify root cause
 - [ ] Quantify the impact (tokens extracted, financial loss)
 - [ ] Decide on response path (A, B, C, or D)
 - [ ] Execute the chosen response actions
 
 **Recovery and Legal Action (First 24 Hours)**
+
 - [ ] Assess legal recovery options with counsel
 - [ ] Preserve evidence for potential legal proceedings
 - [ ] Communicate with internal and external stakeholders
 - [ ] Complete the revocation if possible and appropriate
 
 **Post-Incident Review (First Week)**
+
 - [ ] Conduct post-incident analysis and document lessons learned
 - [ ] Implement preventive measures to avoid future incidents
 - [ ] Update documentation and training materials
@@ -2972,6 +3225,7 @@ Use this checklist during an emergency to ensure all critical steps are complete
 Maintain an up-to-date list of emergency contacts for incident response:
 
 **Internal Contacts**
+
 - Security Team Lead: [Name, Phone, Email]
 - Legal Counsel: [Name, Phone, Email]
 - Finance Team Lead: [Name, Phone, Email]
@@ -2979,12 +3233,14 @@ Maintain an up-to-date list of emergency contacts for incident response:
 - Executive Sponsor: [Name, Phone, Email]
 
 **External Contacts**
+
 - External Legal Counsel: [Firm Name, Contact, Phone, Email]
 - Blockchain Forensics Firm: [Firm Name, Contact, Phone, Email]
 - Stellar/Soroban Technical Support: [Contact Information]
 - Cyber Insurance Provider: [Company Name, Policy Number, Contact]
 
 **Communication Channels**
+
 - Emergency Slack Channel: [Channel Name]
 - Emergency Email List: [Email Address]
 - Incident Management System: [System Name, URL]
@@ -2994,9 +3250,10 @@ Maintain an up-to-date list of emergency contacts for incident response:
 
 **Scenario 1: Beneficiary Claims Tokens Before Freeze Confirmation**
 
-*Situation*: Administrator submits freeze transaction at T=0. Beneficiary observes the pending freeze and submits a claim transaction at T=1 with a higher fee. Due to surge pricing, the claim transaction is included in the ledger before the freeze transaction.
+_Situation_: Administrator submits freeze transaction at T=0. Beneficiary observes the pending freeze and submits a claim transaction at T=1 with a higher fee. Due to surge pricing, the claim transaction is included in the ledger before the freeze transaction.
 
-*Response*:
+_Response_:
+
 1. Confirm that the claim executed before the freeze by checking the ledger
 2. Calculate the amount of tokens extracted by the beneficiary
 3. Verify that the freeze transaction eventually confirmed and the vault is now frozen
@@ -3006,9 +3263,10 @@ Maintain an up-to-date list of emergency contacts for incident response:
 
 **Scenario 2: Freeze Transaction Fails Due to Authorization Issue**
 
-*Situation*: Administrator submits freeze transaction, but it fails with "Unauthorized" error because the wrong administrator account was used or the account's authorization was revoked.
+_Situation_: Administrator submits freeze transaction, but it fails with "Unauthorized" error because the wrong administrator account was used or the account's authorization was revoked.
 
-*Response*:
+_Response_:
+
 1. Immediately identify the correct administrator account with freeze authorization
 2. Submit a new freeze transaction from the authorized account
 3. Use higher fees to ensure rapid inclusion
@@ -3018,9 +3276,10 @@ Maintain an up-to-date list of emergency contacts for incident response:
 
 **Scenario 3: Revocation Transaction Fails After Freeze**
 
-*Situation*: Vault is successfully frozen, but the revocation transaction fails with "No tokens to revoke" or another error.
+_Situation_: Vault is successfully frozen, but the revocation transaction fails with "No tokens to revoke" or another error.
 
-*Response*:
+_Response_:
+
 1. Query the vault state to understand why the revocation failed
 2. Possible causes:
    - All tokens were already claimed before the freeze (check `released_amount`)
@@ -3032,9 +3291,10 @@ Maintain an up-to-date list of emergency contacts for incident response:
 
 **Scenario 4: Multiple Failed Claim Attempts After Freeze**
 
-*Situation*: After the vault is frozen, the beneficiary submits multiple claim transactions that all fail with "Vault is frozen" error.
+_Situation_: After the vault is frozen, the beneficiary submits multiple claim transactions that all fail with "Vault is frozen" error.
 
-*Response*:
+_Response_:
+
 1. This is the expected outcome - the freeze mechanism is working correctly
 2. Document the failed claim attempts as evidence of attempted front-running
 3. Proceed with the revocation as planned
@@ -3043,9 +3303,10 @@ Maintain an up-to-date list of emergency contacts for incident response:
 
 **Scenario 5: Network Congestion Delays Freeze Confirmation**
 
-*Situation*: During severe network congestion, the freeze transaction is delayed for 30+ seconds, giving the beneficiary an extended window to front-run.
+_Situation_: During severe network congestion, the freeze transaction is delayed for 30+ seconds, giving the beneficiary an extended window to front-run.
 
-*Response*:
+_Response_:
+
 1. Monitor the mempool for any claim transactions submitted by the beneficiary
 2. If a claim transaction is detected, assess whether it will execute before the freeze
 3. Consider submitting a second freeze transaction with a much higher fee to compete for inclusion
@@ -3064,6 +3325,7 @@ Effective emergency response requires:
 - **Post-incident learning** to prevent future incidents through improved procedures and training
 
 **Key Principles**:
+
 1. **Stay calm and follow the checklist** - panic leads to mistakes
 2. **Preserve evidence immediately** - transaction records may be needed for legal action
 3. **Prioritize containment over recovery** - freeze the vault first, then assess options
@@ -3116,6 +3378,14 @@ This section provides links to official Soroban and Stellar documentation refere
    - URL: https://www.stellar.org/blog/developers/issuer-enforced-finality-explained
    - Description: Explanation of Stellar's strong finality guarantees and why chain reorganizations do not occur
    - Relevance: Demonstrates that once a transaction is confirmed, it cannot be reversed, eliminating certain attack vectors
+
+### Vesting Pause Functionality
+
+13. **On-Chain Proposal for Vesting Pause**
+
+- URL: ./ON-CHAIN_PROPOSAL_FOR_VESTING_PAUSE.md
+- Description: Complete specification for pause_specific_schedule functionality providing legal safety valve capabilities
+- Relevance: Critical security feature for handling legal disputes, hacks, and contractual breaches
 
 ### Privacy Features and Zero-Knowledge Proofs
 
@@ -3176,7 +3446,7 @@ This security documentation is based on information available as of the document
 - Consult with Stellar experts or security auditors for high-value deployments
 - Subscribe to Stellar developer newsletters and security advisories
 
-**Last Updated**: [Document creation date]  
+**Last Updated**: [Document creation date]
 **Next Review Date**: [Recommended: 6 months from creation]
 
 For questions or clarifications about this security documentation, consult the official Stellar and Soroban resources listed above or engage with the Stellar developer community.
