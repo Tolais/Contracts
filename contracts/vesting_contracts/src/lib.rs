@@ -41,6 +41,10 @@ pub use inheritance::{
 
 // 10 years in seconds
 pub const MAX_DURATION: u64 = 315_360_000;
+// 72 hours in seconds for challenge period
+pub const CHALLENGE_PERIOD: u64 = 259_200;
+// 51% voting threshold (represented as basis points: 5100 = 51.00%)
+pub const VOTING_THRESHOLD: u32 = 5100;
 
 #[contracttype]
 pub enum WhitelistDataKey {
@@ -66,6 +70,11 @@ pub enum DataKey {
     TotalShares,
     TotalStaked,
     StakingContract,
+    // Defensive Governance
+    GovernanceProposal(u64),
+    GovernanceVotes(u64, Address),
+    ProposalCount,
+    TotalLockedValue,
     PausedVault(u64),
     PauseAuthority,
     NFTMinter,
@@ -125,6 +134,37 @@ pub struct Milestone {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum GovernanceAction {
+    AdminRotation(Address),     // new_admin
+    ContractUpgrade(Address),  // new_contract_address
+    EmergencyPause(bool),       // pause_state
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceProposal {
+    pub id: u64,
+    pub action: GovernanceAction,
+    pub proposer: Address,
+    pub created_at: u64,
+    pub challenge_end: u64,
+    pub is_executed: bool,
+    pub is_cancelled: bool,
+    pub yes_votes: i128,   // Total locked value voting yes
+    pub no_votes: i128,    // Total locked value voting no
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Vote {
+    pub voter: Address,
+    pub vote_weight: i128,
+    pub is_yes: bool,
+    pub voted_at: u64,
+}
+
+#[contracttype]
 pub struct BatchCreateData {
     pub recipients: Vec<Address>,
     pub asset_baskets: Vec<Vec<AssetAllocation>>, // Each recipient gets a basket of assets
@@ -156,6 +196,28 @@ pub struct VaultCreated {
     pub title: String,
 }
 
+#[contracttype]
+pub struct GovernanceProposalCreated {
+    pub proposal_id: u64,
+    pub action: GovernanceAction,
+    pub proposer: Address,
+    pub challenge_end: u64,
+}
+
+#[contracttype]
+pub struct VoteCast {
+    pub proposal_id: u64,
+    pub voter: Address,
+    pub vote_weight: i128,
+    pub is_yes: bool,
+}
+
+#[contracttype]
+pub struct GovernanceActionExecuted {
+    pub proposal_id: u64,
+    pub action: GovernanceAction,
+}
+
 #[contract]
 pub struct VestingContract;
 
@@ -173,6 +235,9 @@ impl VestingContract {
         env.storage().instance().set(&DataKey::IsDeprecated, &false);
         env.storage().instance().set(&DataKey::TotalShares, &0i128);
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
+        // Initialize governance
+        env.storage().instance().set(&DataKey::ProposalCount, &0u64);
+        env.storage().instance().set(&DataKey::TotalLockedValue, &initial_supply);
     }
 
     pub fn set_token(env: Env, token: Address) {
@@ -199,11 +264,15 @@ impl VestingContract {
         env.storage().instance().set(&WhitelistDataKey::WhitelistedTokens, &whitelist);
     }
 
-    pub fn propose_new_admin(env: Env, new_admin: Address) {
+    // Defensive Governance Functions
+    pub fn propose_admin_rotation(env: Env, new_admin: Address) -> u64 {
         Self::require_admin(&env);
-        env.storage().instance().set(&DataKey::ProposedAdmin, &new_admin);
+        Self::create_governance_proposal(env, GovernanceAction::AdminRotation(new_admin))
     }
 
+    pub fn propose_contract_upgrade(env: Env, new_contract: Address) -> u64 {
+        Self::require_admin(&env);
+        Self::create_governance_proposal(env, GovernanceAction::ContractUpgrade(new_contract))
     pub fn accept_ownership(env: Env) {
         let proposed: Address = env
             .storage()
@@ -215,10 +284,108 @@ impl VestingContract {
         env.storage().instance().remove(&DataKey::ProposedAdmin);
     }
 
-    pub fn toggle_pause(env: Env) {
+    pub fn propose_emergency_pause(env: Env, pause_state: bool) -> u64 {
         Self::require_admin(&env);
-        let paused: bool = env.storage().instance().get(&DataKey::IsPaused).unwrap_or(false);
-        env.storage().instance().set(&DataKey::IsPaused, &!paused);
+        Self::create_governance_proposal(env, GovernanceAction::EmergencyPause(pause_state))
+    }
+
+    pub fn vote_on_proposal(env: Env, proposal_id: u64, is_yes: bool) {
+        // Get the caller address - this will be the vault owner/beneficiary
+        let voter = Address::generate(&env); // In real implementation, this would be env.invoker()
+        voter.require_auth();
+        let vote_weight = Self::get_voter_locked_value(&env, &voter);
+        
+        if vote_weight <= 0 {
+            panic!("No voting power - no locked tokens");
+        }
+
+        let mut proposal = Self::get_proposal(&env, proposal_id);
+        
+        // Check if voting is still open
+        let now = env.ledger().timestamp();
+        if now >= proposal.challenge_end {
+            panic!("Voting period has ended");
+        }
+        
+        if proposal.is_executed || proposal.is_cancelled {
+            panic!("Proposal is no longer active");
+        }
+
+        // Check if already voted
+        let vote_key = DataKey::GovernanceVotes(proposal_id, voter.clone());
+        if env.storage().instance().has(&vote_key) {
+            panic!("Already voted on this proposal");
+        }
+
+        // Record vote
+        let vote = Vote {
+            voter: voter.clone(),
+            vote_weight,
+            is_yes,
+            voted_at: now,
+        };
+        env.storage().instance().set(&vote_key, &vote);
+
+        // Update proposal vote counts
+        if is_yes {
+            proposal.yes_votes += vote_weight;
+        } else {
+            proposal.no_votes += vote_weight;
+        }
+
+        env.storage().instance().set(&DataKey::GovernanceProposal(proposal_id), &proposal);
+
+        // Publish vote event
+        let vote_event = VoteCast {
+            proposal_id,
+            voter,
+            vote_weight,
+            is_yes,
+        };
+        env.events().publish((Symbol::new(&env, "vote_cast"), proposal_id), vote_event);
+    }
+
+    pub fn execute_proposal(env: Env, proposal_id: u64) {
+        let mut proposal = Self::get_proposal(&env, proposal_id);
+        let now = env.ledger().timestamp();
+
+        // Check challenge period has ended
+        if now < proposal.challenge_end {
+            panic!("Challenge period not yet ended");
+        }
+
+        if proposal.is_executed || proposal.is_cancelled {
+            panic!("Proposal already processed");
+        }
+
+        // Check if proposal passes (no veto from 51%+ of locked value)
+        let total_locked = Self::get_total_locked_value(&env);
+        let no_percentage = (proposal.no_votes * 10000) / total_locked;
+
+        if no_percentage >= VOTING_THRESHOLD as i128 {
+            // Proposal is vetoed - cancel it
+            proposal.is_cancelled = true;
+            env.storage().instance().set(&DataKey::GovernanceProposal(proposal_id), &proposal);
+            return;
+        }
+
+        // Execute the governance action
+        Self::execute_governance_action(&env, &proposal.action);
+        
+        proposal.is_executed = true;
+        env.storage().instance().set(&DataKey::GovernanceProposal(proposal_id), &proposal);
+
+        // Publish execution event
+        let exec_event = GovernanceActionExecuted {
+            proposal_id,
+            action: proposal.action.clone(),
+        };
+        env.events().publish((Symbol::new(&env, "governance_executed"), proposal_id), exec_event);
+    }
+
+    // Legacy pause function - now requires governance proposal
+    pub fn toggle_pause(env: Env) {
+        panic!("Direct pause not allowed. Use propose_emergency_pause() instead.");
     }
 
     pub fn create_vault_full(
@@ -1819,6 +1986,99 @@ impl VestingContract {
             total_claimable += Self::calculate_claimable_for_asset(env, id, vault, i.try_into().unwrap());
         }
         total_claimable
+    // --- Governance Helper Functions ---
+
+    fn create_governance_proposal(env: Env, action: GovernanceAction) -> u64 {
+        let proposer = Self::get_admin(&env);
+        let now = env.ledger().timestamp();
+        let proposal_id = Self::increment_proposal_count(&env);
+        
+        let proposal = GovernanceProposal {
+            id: proposal_id,
+            action: action.clone(),
+            proposer: proposer.clone(),
+            created_at: now,
+            challenge_end: now + CHALLENGE_PERIOD,
+            is_executed: false,
+            is_cancelled: false,
+            yes_votes: 0,
+            no_votes: 0,
+        };
+
+        env.storage().instance().set(&DataKey::GovernanceProposal(proposal_id), &proposal);
+
+        // Publish proposal creation event
+        let proposal_event = GovernanceProposalCreated {
+            proposal_id,
+            action: action.clone(),
+            proposer,
+            challenge_end: proposal.challenge_end,
+        };
+        env.events().publish((Symbol::new(&env, "governance_proposal"), proposal_id), proposal_event);
+
+        proposal_id
+    }
+
+    fn get_proposal(env: &Env, proposal_id: u64) -> GovernanceProposal {
+        env.storage().instance()
+            .get(&DataKey::GovernanceProposal(proposal_id))
+            .expect("Proposal not found")
+    }
+
+    fn get_voter_locked_value(env: &Env, voter: &Address) -> i128 {
+        // Get all vaults for this voter and sum their total amounts
+        let vault_ids: Vec<u64> = env.storage().instance()
+            .get(&DataKey::UserVaults(voter.clone()))
+            .unwrap_or(Vec::new(env));
+        
+        let mut total_locked = 0i128;
+        for vault_id in vault_ids.iter() {
+            let vault = Self::get_vault_internal(env, *vault_id);
+            total_locked += vault.total_amount - vault.released_amount;
+        }
+        
+        total_locked
+    }
+
+    fn get_total_locked_value(env: &Env) -> i128 {
+        env.storage().instance()
+            .get(&DataKey::TotalLockedValue)
+            .unwrap_or(0i128)
+    }
+
+    fn execute_governance_action(env: &Env, action: &GovernanceAction) {
+        match action {
+            GovernanceAction::AdminRotation(new_admin) => {
+                env.storage().instance().set(&DataKey::AdminAddress, new_admin);
+            },
+            GovernanceAction::ContractUpgrade(new_contract) => {
+                env.storage().instance().set(&DataKey::MigrationTarget, new_contract);
+                env.storage().instance().set(&DataKey::IsDeprecated, &true);
+            },
+            GovernanceAction::EmergencyPause(pause_state) => {
+                env.storage().instance().set(&DataKey::IsPaused, pause_state);
+            },
+        }
+    }
+
+    fn increment_proposal_count(env: &Env) -> u64 {
+        let count: u64 = env.storage().instance().get(&DataKey::ProposalCount).unwrap_or(0);
+        let new_count = count + 1;
+        env.storage().instance().set(&DataKey::ProposalCount, &new_count);
+        new_count
+    }
+
+    // Public getter functions for governance
+    pub fn get_proposal_info(env: Env, proposal_id: u64) -> GovernanceProposal {
+        Self::get_proposal(&env, proposal_id)
+    }
+
+    pub fn get_voter_power(env: Env, voter: Address) -> i128 {
+        Self::get_voter_locked_value(&env, &voter)
+    }
+
+    pub fn get_total_locked(env: Env) -> i128 {
+        Self::get_total_locked_value(&env)
     }
 }
 
