@@ -17,6 +17,7 @@ use soroban_sdk::{
 };
 
 mod factory;
+pub use factory::{ VestingFactory, VestingFactoryClient };
 mod oracle;
 pub use factory::{ VestingFactory, VestingFactoryClient };
 pub use oracle::{ OracleClient, OracleCondition, OracleType, ComparisonOperator, PerformanceCliff };
@@ -48,6 +49,7 @@ pub enum DataKey {
     TotalShares,
     TotalStaked,
     StakingContract,
+    CollateralBridge,
     MetadataAnchor,
     NFTMinter,
     VotingDelegate(Address),
@@ -73,6 +75,7 @@ pub struct Vault {
     pub is_irrevocable: bool,
     pub is_transferable: bool,
     pub is_frozen: bool,
+    pub locked_amount: i128, // Amount locked for collateral liens
 }
 
 #[contracttype]
@@ -451,7 +454,76 @@ impl VestingContract {
     pub fn get_claimable_amount(env: Env, vault_id: u64) -> i128 {
         let vault = Self::get_vault_internal(&env, vault_id);
         let vested = Self::calculate_claimable(&env, vault_id, &vault);
-        vested - vault.released_amount
+        let claimable = vested - vault.released_amount;
+        // Subtract locked amount from claimable
+        claimable - vault.locked_amount.max(0)
+    }
+
+    pub fn lock_tokens(env: Env, vault_id: u64, amount: i128) {
+        // Only authorized collateral bridge can call this
+        Self::require_collateral_bridge(&env);
+
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+        let total_unvested = vault.total_amount - vault.released_amount;
+        let available_to_lock = total_unvested - vault.locked_amount;
+
+        if amount > available_to_lock {
+            panic!("Insufficient available tokens to lock");
+        }
+
+        vault.locked_amount += amount;
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
+
+    pub fn unlock_tokens(env: Env, vault_id: u64, amount: i128) {
+        // Only authorized collateral bridge can call this
+        Self::require_collateral_bridge(&env);
+
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+
+        if amount > vault.locked_amount {
+            panic!("Cannot unlock more than locked amount");
+        }
+
+        vault.locked_amount -= amount;
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
+
+    pub fn claim_by_lender(env: Env, vault_id: u64, lender: Address, amount: i128) -> i128 {
+        // Only authorized collateral bridge can call this
+        Self::require_collateral_bridge(&env);
+
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+        if vault.is_frozen {
+            panic!("Vault frozen");
+        }
+        if !vault.is_initialized {
+            panic!("Vault not initialized");
+        }
+
+        let vested = Self::calculate_claimable(&env, vault_id, &vault);
+        let available_for_lender = (vested - vault.released_amount - vault.locked_amount).min(
+            amount
+        );
+
+        if available_for_lender <= 0 {
+            panic!("No tokens available for lender claim");
+        }
+
+        vault.released_amount += available_for_lender;
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
+        token::Client
+            ::new(&env, &token)
+            .transfer(&env.current_contract_address(), &lender, &available_for_lender);
+
+        available_for_lender
+    }
+
+    pub fn set_collateral_bridge(env: Env, bridge_address: Address) {
+        Self::require_admin(&env);
+        env.storage().instance().set(&DataKey::CollateralBridge, &bridge_address);
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -589,6 +661,15 @@ impl VestingContract {
         }
     }
 
+    fn require_collateral_bridge(env: &Env) {
+        let bridge: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CollateralBridge)
+            .expect("Collateral bridge not set");
+        bridge.require_auth();
+    }
+
     fn require_valid_duration(start: u64, end: u64) {
         if end <= start {
             panic!("Invalid duration");
@@ -619,6 +700,13 @@ impl VestingContract {
             keeper_fee,
             is_revocable,
             is_transferable,
+            is_frozen: false,
+            locked_amount: 0,
+        };
+        env.storage().instance().set(&DataKey::VaultData(id), &vault);
+        Self::add_user_vault_index(env, &owner, id);
+        Self::add_total_shares(env, amount);
+        id
             step_duration,
             true,
         )
@@ -673,6 +761,7 @@ impl VestingContract {
             is_irrevocable: !is_revocable,
             is_transferable,
             is_frozen: false,
+            locked_amount: 0,
         };
         env.storage().instance().set(&DataKey::VaultData(id), &vault);
         if is_initialized {
@@ -819,6 +908,10 @@ impl VestingContract {
                 if m.is_unlocked {
                     pct += m.percentage;
                 }
+            }
+            if pct > 100 {
+                pct = 100;
+            }
             }
             if pct > 100 {
                 pct = 100;
