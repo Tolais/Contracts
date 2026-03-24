@@ -13,6 +13,16 @@ pub use stake::{
     call_stake_tokens, call_unstake_tokens, call_claim_yield_for,
 };
 
+pub mod inheritance;
+pub use inheritance::{
+    SuccessionState, SuccessionView, InheritanceError,
+    NominatedData, ClaimPendingData, SucceededData,
+    MIN_SWITCH_DURATION, MAX_SWITCH_DURATION, MIN_CHALLENGE_WINDOW, MAX_CHALLENGE_WINDOW,
+    nominate_backup, revoke_backup, update_activity,
+    initiate_succession_claim, finalise_succession, cancel_succession_claim,
+    get_succession_status, get_succession_state,
+};
+
 // 10 years in seconds
 pub const MAX_DURATION: u64 = 315_360_000;
 
@@ -43,6 +53,7 @@ pub enum DataKey {
     DelegatedBeneficiaries(Address),
     GlobalAccelerationPct,
     RevokedVaults,
+    VaultSuccession(u64),
 }
 
 #[contracttype]
@@ -211,6 +222,9 @@ impl VestingContract {
         if vault.is_frozen { panic!("Vault frozen"); }
         if !vault.is_initialized { panic!("Vault not initialized"); }
         vault.owner.require_auth();
+
+        // Heartbeat: reset Dead-Man's Switch on every primary interaction
+        update_activity(&env, vault_id);
 
         let vested = Self::calculate_claimable(&env, vault_id, &vault);
         if claim_amount > (vested - vault.released_amount) {
@@ -428,6 +442,9 @@ impl VestingContract {
         // Auth: owner or admin — require owner auth (admin can mock_all_auths in tests)
         vault.owner.require_auth();
 
+        // Heartbeat: reset Dead-Man's Switch
+        update_activity(&env, vault_id);
+
         // Validate staking contract is whitelisted
         if !is_approved_staking_contract(&env, &staking_contract) {
             panic!("UnauthorizedStakingContract");
@@ -473,6 +490,8 @@ impl VestingContract {
         Self::require_not_paused(&env);
         let mut vault = Self::get_vault_internal(&env, vault_id);
         vault.owner.require_auth();
+        // Heartbeat: reset Dead-Man's Switch
+        update_activity(&env, vault_id);
         Self::do_unstake(&env, vault_id, &mut vault);
     }
 
@@ -488,6 +507,9 @@ impl VestingContract {
         Self::require_not_paused(&env);
         let vault = Self::get_vault_internal(&env, vault_id);
         vault.owner.require_auth();
+
+        // Heartbeat: reset Dead-Man's Switch
+        update_activity(&env, vault_id);
 
         // Guard: revoked vaults cannot claim yield
         if Self::is_vault_revoked(&env, vault_id) {
@@ -578,6 +600,76 @@ impl VestingContract {
             tokens_staked: info.tokens_staked,
             accumulated_yield: info.accumulated_yield,
         }
+    }
+
+    // --- Inheritance / Dead-Man's Switch Functions ---
+
+    /// Nominate a backup address and configure the inactivity timer.
+    ///
+    /// # Security
+    /// - Caller must be the vault's current primary beneficiary.
+    /// - `backup` must not equal the primary and must not be the zero address.
+    /// - `switch_duration` must be within `[MIN_SWITCH_DURATION, MAX_SWITCH_DURATION]`.
+    /// - `challenge_window` must be within `[MIN_CHALLENGE_WINDOW, MAX_CHALLENGE_WINDOW]`.
+    /// - Cannot be called after succession has been finalised.
+    pub fn nominate_backup(
+        env: Env,
+        vault_id: u64,
+        backup: Address,
+        switch_duration: u64,
+        challenge_window: u64,
+    ) {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        nominate_backup(&env, vault_id, &vault.owner, backup, switch_duration, challenge_window);
+    }
+
+    /// Revoke the nominated backup, resetting succession state to `None`.
+    ///
+    /// # Security
+    /// - Caller must be the vault's current primary beneficiary.
+    /// - Only valid when state is `Nominated` — blocked during an active claim.
+    pub fn revoke_backup(env: Env, vault_id: u64) {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        revoke_backup(&env, vault_id, &vault.owner);
+    }
+
+    /// Initiate a succession claim as the nominated backup.
+    ///
+    /// # Security
+    /// - Caller must be the nominated backup address.
+    /// - The inactivity timer must have fully elapsed.
+    pub fn initiate_succession_claim(env: Env, vault_id: u64, caller: Address) {
+        initiate_succession_claim(&env, vault_id, &caller);
+    }
+
+    /// Finalise succession, permanently transferring vault ownership to the backup.
+    ///
+    /// # Security
+    /// - Caller must be the backup address.
+    /// - The challenge window must have fully elapsed.
+    /// - This operation is irreversible.
+    pub fn finalise_succession(env: Env, vault_id: u64, caller: Address) {
+        let new_owner = finalise_succession(&env, vault_id, &caller);
+        // Update the vault's owner field to the new primary
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+        vault.owner = new_owner;
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+    }
+
+    /// Cancel a pending succession claim. Resets state to `Nominated`.
+    ///
+    /// # Security
+    /// - Caller must be the current primary beneficiary.
+    /// - State must be `ClaimPending`.
+    pub fn cancel_succession_claim(env: Env, vault_id: u64) {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        cancel_succession_claim(&env, vault_id, &vault.owner);
+    }
+
+    /// Return the full succession status for a vault.
+    pub fn get_succession_status(env: Env, vault_id: u64) -> SuccessionView {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        get_succession_status(&env, vault_id, vault.owner)
     }
 
     // --- Internal Helpers ---
