@@ -79,3 +79,101 @@ To remove a staking contract from the whitelist: `remove_staking_contract(stakin
 | `UnstakeBeforeRevocationFailed` | Auto-unstake during revocation could not complete |
 | `YieldClaimFailed` | The yield claim call to the staking contract failed |
 | `Vault is irrevocable` | Cannot revoke a vault marked irrevocable |
+
+---
+
+## Inheritance & Succession (Dead-Man's Switch)
+
+### Overview
+
+Locked assets in a vesting vault are at risk of permanent loss if the primary beneficiary loses their private key or passes away. The inheritance system solves this by letting the primary nominate a backup address and an inactivity timer. If the primary makes no on-chain vault interactions for the full timer duration, the backup can claim ownership — preventing assets from being locked forever.
+
+This implements a Dead-Man's Switch: the primary must periodically "check in" by interacting with their vault. Silence for long enough triggers the succession path.
+
+### Succession lifecycle
+
+```
+None
+ │
+ │  nominate_backup()
+ ▼
+Nominated  ◄──────────────────────────────────────────────────────────────────┐
+ │                                                                             │
+ │  (primary inactive for switch_duration)                                    │
+ │  initiate_succession_claim()  [called by backup]                           │
+ ▼                                                                             │
+ClaimPending ──── primary acts (claim_tokens, auto_stake, etc.) ──────────────┘
+ │                                                                             │
+ │  (challenge_window elapses, primary did not cancel)                        │
+ │  finalise_succession()  [called by backup]                                 │
+ ▼
+Succeeded  (irreversible — vault.owner = backup)
+```
+
+### Dead-Man's Switch mechanics
+
+Every vault function the primary calls (`claim_tokens`, `auto_stake`, `manual_unstake`, `claim_yield`) invokes `update_activity()` internally. This resets the inactivity timer to the current block timestamp.
+
+The backup can only initiate a claim when:
+
+```
+now - last_activity >= switch_duration
+```
+
+If the primary acts at any point — even during an active claim — the claim is cancelled and the timer resets.
+
+### Challenge window
+
+After the backup calls `initiate_succession_claim`, a challenge window opens. During this window the primary can call `cancel_succession_claim` to abort the succession and reset to `Nominated`. This protects against premature or malicious claims.
+
+The backup can only finalise succession when:
+
+```
+now - claimed_at >= challenge_window
+```
+
+### Configuration guide
+
+| Parameter | Minimum | Maximum | Recommended |
+|---|---|---|---|
+| `switch_duration` | 30 days | 730 days | 180 days |
+| `challenge_window` | 1 day | 30 days | 7 days |
+
+Choose a `switch_duration` long enough that normal inactivity (holidays, illness) does not trigger succession, but short enough to protect against permanent key loss.
+
+### Security assumptions
+
+| What the vault verifies | Notes |
+|---|---|
+| Caller is the vault owner before nominating/revoking | `require_auth()` on `vault.owner` |
+| Caller is the backup before claiming/finalising | Checked against stored backup address |
+| Timer has fully elapsed before claim is allowed | `elapsed >= switch_duration` (not `>`) |
+| Challenge window has fully elapsed before finalise | `elapsed >= challenge_window` (not `>`) |
+| Backup != primary | Validated before storing |
+| Succession is irreversible once finalised | `Succeeded` state has no revert path |
+| Cannot nominate after succession | `AlreadySucceeded` guard in `nominate_backup` |
+
+### Interaction with staking and vesting
+
+- Staking (`auto_stake`, `manual_unstake`, `claim_yield`) all trigger the activity heartbeat — they count as primary activity.
+- Succession transfers `vault.owner` to the backup. All future vault interactions (claims, staking, revocation) require the new owner's signature.
+- Vesting schedules are unaffected — the schedule continues on the same timeline with the new owner.
+- Revocation by the admin is independent of succession state.
+
+### Error reference
+
+| Error | Description | Remediation |
+|---|---|---|
+| `BackupEqualsPrimary` | Backup address is the same as the vault owner | Choose a different backup address |
+| `BackupIsZeroAddress` | Backup address is the zero address | Provide a valid account address |
+| `SwitchDurationBelowMinimum` | `switch_duration` < 30 days | Use at least `MIN_SWITCH_DURATION` (2,592,000 s) |
+| `SwitchDurationAboveMaximum` | `switch_duration` > 730 days | Use at most `MAX_SWITCH_DURATION` (63,072,000 s) |
+| `ChallengeWindowOutOfRange` | `challenge_window` outside [1 day, 30 days] | Use a value within the allowed range |
+| `NoPlanNominated` | No backup has been nominated | Call `nominate_backup` first |
+| `AlreadySucceeded` | Succession has been finalised | State is permanent; no further changes possible |
+| `ClaimAlreadyPending` | A claim is already in progress | Wait for the claim to be finalised or cancelled |
+| `SwitchTimerNotElapsed` | Primary was active within `switch_duration` | Wait for the full inactivity period to elapse |
+| `ChallengeWindowNotElapsed` | Challenge window has not closed yet | Wait for `challenge_window` seconds after the claim |
+| `CallerIsNotBackup` | Caller is not the nominated backup | Only the backup address can initiate or finalise claims |
+| `CallerIsNotPrimary` | Caller is not the current vault owner | Only the primary can cancel claims or revoke the backup |
+| `RevocationBlockedDuringClaim` | Cannot revoke backup while a claim is pending | Cancel the claim first, then revoke |

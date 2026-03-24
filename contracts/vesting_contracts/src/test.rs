@@ -872,3 +872,361 @@ fn test_get_stake_status_initial_is_unstaked() {
     assert_eq!(status.tokens_staked, 0);
     assert_eq!(status.accumulated_yield, 0);
 }
+
+// =============================================================================
+// Inheritance / Dead-Man's Switch Tests
+// =============================================================================
+
+use crate::{
+    SuccessionState, NominatedData, ClaimPendingData, SucceededData,
+    MIN_SWITCH_DURATION, MAX_SWITCH_DURATION, MIN_CHALLENGE_WINDOW, MAX_CHALLENGE_WINDOW,
+};
+
+/// 30-day switch duration in seconds (minimum allowed).
+const SWITCH_30D: u64 = MIN_SWITCH_DURATION;
+/// 7-day challenge window in seconds.
+const CHALLENGE_7D: u64 = 7 * 24 * 60 * 60;
+
+fn make_vault_for(client: &VestingContractClient, env: &Env, beneficiary: &Address) -> u64 {
+    let now = env.ledger().timestamp();
+    client.create_vault_full(
+        beneficiary,
+        &1000i128,
+        &now,
+        &(now + 10_000_000),
+        &0i128,
+        &true,
+        &false,
+        &0u64,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// nominate_backup
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nominate_valid_backup_state_is_nominated() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+
+    let view = client.get_succession_status(&vault_id);
+    assert_eq!(view.backup, Some(backup));
+    assert!(matches!(view.state, SuccessionState::Nominated(_)));
+}
+
+#[test]
+#[should_panic(expected = "BackupEqualsPrimary")]
+fn test_nominate_backup_equal_to_primary_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &primary, &SWITCH_30D, &CHALLENGE_7D);
+}
+
+#[test]
+#[should_panic(expected = "SwitchDurationBelowMinimum")]
+fn test_nominate_switch_duration_below_minimum_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &(SWITCH_30D - 1), &CHALLENGE_7D);
+}
+
+#[test]
+#[should_panic(expected = "SwitchDurationAboveMaximum")]
+fn test_nominate_switch_duration_above_maximum_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &(MAX_SWITCH_DURATION + 1), &CHALLENGE_7D);
+}
+
+#[test]
+#[should_panic(expected = "ChallengeWindowOutOfRange")]
+fn test_nominate_challenge_window_below_minimum_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &(MIN_CHALLENGE_WINDOW - 1));
+}
+
+#[test]
+#[should_panic(expected = "ChallengeWindowOutOfRange")]
+fn test_nominate_challenge_window_above_maximum_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &(MAX_CHALLENGE_WINDOW + 1));
+}
+
+#[test]
+fn test_renomination_overwrites_previous_backup() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup1 = Address::generate(&env);
+    let backup2 = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup1, &SWITCH_30D, &CHALLENGE_7D);
+    client.nominate_backup(&vault_id, &backup2, &SWITCH_30D, &CHALLENGE_7D);
+
+    let view = client.get_succession_status(&vault_id);
+    assert_eq!(view.backup, Some(backup2));
+}
+
+// ---------------------------------------------------------------------------
+// revoke_backup
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_revoke_backup_resets_state_to_none() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    client.revoke_backup(&vault_id);
+
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::None));
+}
+
+#[test]
+#[should_panic(expected = "RevocationBlockedDuringClaim")]
+fn test_revoke_backup_during_active_claim_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    // Advance past switch duration
+    env.ledger().set_timestamp(now + SWITCH_30D + 1);
+    client.initiate_succession_claim(&vault_id, &backup);
+
+    // Primary tries to revoke — should be blocked
+    client.revoke_backup(&vault_id);
+}
+
+// ---------------------------------------------------------------------------
+// update_activity / heartbeat
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_primary_activity_resets_timer() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+
+    // Advance time but not past switch duration
+    env.ledger().set_timestamp(now + SWITCH_30D / 2);
+
+    // Primary claims tokens — triggers update_activity heartbeat
+    client.claim_tokens(&vault_id, &0i128);
+
+    let view = client.get_succession_status(&vault_id);
+    if let SuccessionState::Nominated(data) = view.state {
+        assert_eq!(data.last_activity, now + SWITCH_30D / 2);
+    } else {
+        panic!("Expected Nominated state");
+    }
+}
+
+#[test]
+fn test_primary_activity_during_challenge_window_cancels_claim() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D + 1);
+    client.initiate_succession_claim(&vault_id, &backup);
+
+    // Primary acts during challenge window
+    env.ledger().set_timestamp(now + SWITCH_30D + 2);
+    client.claim_tokens(&vault_id, &0i128);
+
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::Nominated(_)));
+}
+
+// ---------------------------------------------------------------------------
+// initiate_succession_claim
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "SwitchTimerNotElapsed")]
+fn test_backup_claims_before_timer_elapses_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    // Only advance half the switch duration
+    env.ledger().set_timestamp(now + SWITCH_30D / 2);
+    client.initiate_succession_claim(&vault_id, &backup);
+}
+
+#[test]
+fn test_backup_claims_after_timer_elapses_state_is_claim_pending() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::ClaimPending(_)));
+}
+
+// ---------------------------------------------------------------------------
+// cancel_succession_claim
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_primary_cancels_during_challenge_window_state_reverts_to_nominated() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+
+    // Primary cancels before challenge window closes
+    env.ledger().set_timestamp(now + SWITCH_30D + CHALLENGE_7D / 2);
+    client.cancel_succession_claim(&vault_id);
+
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::Nominated(_)));
+}
+
+// ---------------------------------------------------------------------------
+// finalise_succession
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "ChallengeWindowNotElapsed")]
+fn test_backup_finalises_before_challenge_window_closes_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+
+    // Try to finalise immediately — challenge window not elapsed
+    client.finalise_succession(&vault_id, &backup);
+}
+
+#[test]
+fn test_backup_finalises_after_challenge_window_state_is_succeeded() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+    env.ledger().set_timestamp(now + SWITCH_30D + CHALLENGE_7D);
+    client.finalise_succession(&vault_id, &backup);
+
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::Succeeded(_)));
+    // Vault owner should now be the backup
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.owner, backup);
+}
+
+#[test]
+#[should_panic(expected = "AlreadySucceeded")]
+fn test_nominate_new_backup_post_succession_rejected() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let backup2 = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+    env.ledger().set_timestamp(now + SWITCH_30D + CHALLENGE_7D);
+    client.finalise_succession(&vault_id, &backup);
+
+    // Old primary tries to nominate again — should fail
+    client.nominate_backup(&vault_id, &backup2, &SWITCH_30D, &CHALLENGE_7D);
+}
+
+// ---------------------------------------------------------------------------
+// Full happy path
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_full_happy_path_nominate_claim_finalise_new_owner_verified() {
+    let (env, _, client, _, _) = setup();
+    let primary = Address::generate(&env);
+    let backup = Address::generate(&env);
+    let vault_id = make_vault_for(&client, &env, &primary);
+    let now = env.ledger().timestamp();
+
+    // 1. Nominate
+    client.nominate_backup(&vault_id, &backup, &SWITCH_30D, &CHALLENGE_7D);
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::Nominated(_)));
+
+    // 2. Timer elapses — backup initiates claim
+    env.ledger().set_timestamp(now + SWITCH_30D);
+    client.initiate_succession_claim(&vault_id, &backup);
+    let view = client.get_succession_status(&vault_id);
+    assert!(matches!(view.state, SuccessionState::ClaimPending(_)));
+
+    // 3. Challenge window elapses — backup finalises
+    env.ledger().set_timestamp(now + SWITCH_30D + CHALLENGE_7D);
+    client.finalise_succession(&vault_id, &backup);
+
+    // 4. Verify new ownership
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.owner, backup);
+    let view = client.get_succession_status(&vault_id);
+    if let SuccessionState::Succeeded(data) = view.state {
+        assert_eq!(data.new_owner, backup);
+    } else {
+        panic!("Expected Succeeded state");
+    }
+}
