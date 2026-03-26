@@ -127,7 +127,6 @@ fn test_milestones() {
         &0u64
     );
 
-    let milestones = vec![&env,
     let milestones = vec![
         &env,
         Milestone { id: 1, percentage: 30, is_unlocked: false },
@@ -365,13 +364,16 @@ fn test_metadata_anchor() {
 
     let retrieved = client.get_metadata_anchor();
     assert_eq!(retrieved, cid);
+}
+
+#[test]
 fn test_voting_power() {
     let (env, _, client, _, _) = setup();
     let beneficiary = Address::generate(&env);
     let now = env.ledger().timestamp();
 
     // Irrevocable vault: 1000 tokens (100% weight = 1000 power)
-    client.create_vault_full(
+    let vault_id = client.create_vault_full(
         &beneficiary,
         &1000i128,
         &now,
