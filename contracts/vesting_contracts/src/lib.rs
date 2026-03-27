@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, contractevent, token, vec, Address, Env, IntoVal, Map, Symbol, Val, Vec, String};
+use soroban_sdk::{contract, contractimpl, contracttype, contractevent, token, vec, Address, Env, IntoVal, Map, Symbol, Val, Vec, String, U256};
 use soroban_sdk::{
     contract,
     contractimpl,
@@ -39,6 +39,16 @@ pub use inheritance::{
     initiate_succession_claim, finalise_succession, cancel_succession_claim,
     get_succession_status, get_succession_state,
 };
+
+pub mod certificate_registry;
+pub use certificate_registry::{
+    VestingCertificateRegistry, VestingCertificateRegistryClient,
+    CompletedVestCertificate, LoyaltyMetrics, WorkVerification,
+    CertificateQuery, CertificateQueryResult, CertificateDataKey,
+};
+
+#[cfg(test)]
+mod certificate_registry_test;
 
 // 10 years in seconds
 pub const MAX_DURATION: u64 = 315_360_000;
@@ -97,6 +107,15 @@ pub enum DataKey {
     SubAdminPool(Address),
     MarketplaceLock(u64),
     XLMAddress,
+    // Certificate Registry
+    CertificateRegistry(U256),
+    BeneficiaryCertificates(Address),
+    WorkTypeIndex(String),
+    LoyaltyIndex(u32),
+    CompletionTimeIndex(u64),
+    CertificateCount,
+    WorkVerification(U256),
+    CertificateVerifier,
 }
 
 #[contracttype]
@@ -1049,6 +1068,9 @@ impl VestingContract {
         // Save updated vault
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
 
+        // Check if vault is fully completed and register certificate
+        Self::check_and_register_certificate(&env, vault_id, &vault);
+
         // Mint NFT if configured
         if let Some(nft_minter) = env.storage().instance().get::<_, Address>(&DataKey::NFTMinter) {
             env.invoke_contract::<()>(
@@ -1099,6 +1121,9 @@ impl VestingContract {
 
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
 
+        // Check if vault is fully completed and register certificate
+        Self::check_and_register_certificate(&env, vault_id, &vault);
+
         // #90: XLM Minimum Reserve Check
         let xlm: Option<Address> = env.storage().instance().get(&DataKey::XLMAddress);
         if let Some(xlm_addr) = xlm {
@@ -1122,6 +1147,61 @@ impl VestingContract {
         }
 
         claim_amount
+    }
+
+    /// Check if vault is fully vested and register certificate if completed
+    /// This function should be called after any claim operation
+    fn check_and_register_certificate(env: &Env, vault_id: u64, vault: &Vault) {
+        // Check if vault is fully vested
+        if Self::is_vault_fully_vested(env, vault_id, vault) {
+            // Check if certificate already registered
+            let certificate_id = U256::from_u64(env, vault_id);
+            if !env.storage().instance().has(&DataKey::CertificateRegistry(certificate_id)) {
+                // Calculate total claimed and asset information
+                let mut total_claimed = 0i128;
+                let mut total_assets = 0i128;
+                let mut asset_types = Vec::new(env);
+                
+                for allocation in vault.allocations.iter() {
+                    total_claimed += allocation.released_amount;
+                    total_assets += allocation.total_amount;
+                    asset_types.push_back(allocation.asset_id.clone());
+                }
+                
+                // Register certificate
+                VestingCertificateRegistry::register_completed_vest(
+                    env.clone(),
+                    vault_id,
+                    vault.owner.clone(),
+                    vault.clone(),
+                    total_claimed,
+                    total_assets,
+                    asset_types,
+                    None, // metadata_uri - can be set later
+                );
+            }
+        }
+    }
+
+    /// Check if a vault is fully vested (all tokens claimed)
+    fn is_vault_fully_vested(env: &Env, vault_id: u64, vault: &Vault) -> bool {
+        let now = env.ledger().timestamp();
+        
+        // Check if vesting period has ended
+        if now < vault.end_time {
+            return false;
+        }
+        
+        // Check if all tokens are claimed
+        let mut total_claimed = 0i128;
+        let mut total_amount = 0i128;
+        
+        for allocation in vault.allocations.iter() {
+            total_claimed += allocation.released_amount;
+            total_amount += allocation.total_amount;
+        }
+        
+        total_claimed >= total_amount
     }
 
     pub fn set_milestones(_env: Env, _vault_id: u64, _milestones: Vec<Milestone>) {
