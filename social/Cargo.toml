@@ -8,7 +8,8 @@ description = "Exclusive comment system and messaging backend for Stellar Protoc
 # Web framework
 actix-web = "4"
 actix-rt = "2"
-actix-websockets = "0.2"
+actix-web-actors = "4"
+actix = "0.13"
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }
@@ -17,6 +18,10 @@ tokio = { version = "1", features = ["full"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+base64 = "0.21"
+
+# Random number generation
+rand = "0.8"
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }

@@ -9,6 +9,7 @@ use tracing::{info, error};
 
 mod comments;
 mod messaging;
+mod websocket;
 
 /// Application state
 pub struct AppState {
@@ -78,6 +79,9 @@ pub async fn run_server(db_pool: PgPool) -> std::io::Result<()> {
                     .route("/{message_id}", web::delete().to(messaging::delete_message))
                     .route("/{message_id}/read", web::put().to(messaging::mark_message_as_read))
             )
+            
+            // WebSocket endpoint for real-time messaging
+            .route("/ws", web::get().to(websocket::ws_route))
     })
     .bind("0.0.0.0:8081")?
     .run()
