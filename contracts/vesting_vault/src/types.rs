@@ -145,3 +145,36 @@ pub struct PrivateClaimExecuted {
     pub amount: i128,
     pub timestamp: u64,
 }
+
+// Stellar Horizon Path Payment Claim types
+#[contracttype]
+#[derive(Clone)]
+pub struct PathPaymentConfig {
+    pub destination_asset: Address, // USDC or other stablecoin
+    pub min_destination_amount: i128,
+    pub path: Vec<Address>, // Path of assets for the swap
+    pub enabled: bool,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct PathPaymentClaimEvent {
+    pub beneficiary: Address,
+    pub source_amount: i128,
+    pub destination_amount: i128,
+    pub destination_asset: Address,
+    pub timestamp: u64,
+    pub vesting_id: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct PathPaymentSimulation {
+    pub source_amount: i128,
+    pub estimated_destination_amount: i128,
+    pub min_destination_amount: i128,
+    pub path: Vec<Address>,
+    pub can_execute: bool,
+    pub reason: String,
+    pub estimated_gas_fee: u64,
+}

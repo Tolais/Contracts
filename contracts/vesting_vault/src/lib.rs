@@ -7,8 +7,8 @@ mod types;
 mod audit_exporter;
 mod emergency;
 
-use types::{ClaimEvent, AuthorizedAddressSet, AddressWhitelistRequest, AuthorizedPayoutAddress, MilestoneConfig, MilestoneStatus, MilestoneCompleted, ClaimSimulation, ReputationBonus, ReputationBonusApplied, Nullifier, Commitment, ZKClaimProof, PrivacyClaimEvent, CommitmentCreated, PrivateClaimExecuted};
-use storage::{get_claim_history, set_claim_history, get_authorized_payout_address as storage_get_authorized_payout_address, set_authorized_payout_address as storage_set_authorized_payout_address, get_pending_address_request as storage_get_pending_address_request, set_pending_address_request as storage_set_pending_address_request, remove_pending_address_request as storage_remove_pending_address_request, get_timelock_duration, get_auditors, set_auditors, get_auditor_pause_requests, set_auditor_pause_requests, get_emergency_pause, set_emergency_pause, remove_emergency_pause, get_reputation_bridge_contract, set_reputation_bridge_contract, has_reputation_bonus_applied, set_reputation_bonus_applied, get_milestone_configs, set_milestone_configs, get_milestone_status, set_milestone_status, get_emergency_pause_duration, is_nullifier_used, set_nullifier_used, get_commitment, set_commitment, mark_commitment_used, add_privacy_claim_event, add_merkle_root, get_merkle_roots, is_valid_merkle_root};
+use types::{ClaimEvent, AuthorizedAddressSet, AddressWhitelistRequest, AuthorizedPayoutAddress, MilestoneConfig, MilestoneStatus, MilestoneCompleted, ClaimSimulation, ReputationBonus, ReputationBonusApplied, Nullifier, Commitment, ZKClaimProof, PrivacyClaimEvent, CommitmentCreated, PrivateClaimExecuted, PathPaymentConfig, PathPaymentClaimEvent, PathPaymentSimulation};
+use storage::{get_claim_history, set_claim_history, get_authorized_payout_address as storage_get_authorized_payout_address, set_authorized_payout_address as storage_set_authorized_payout_address, get_pending_address_request as storage_get_pending_address_request, set_pending_address_request as storage_set_pending_address_request, remove_pending_address_request as storage_remove_pending_address_request, get_timelock_duration, get_auditors, set_auditors, get_auditor_pause_requests, set_auditor_pause_requests, get_emergency_pause, set_emergency_pause, remove_emergency_pause, get_reputation_bridge_contract, set_reputation_bridge_contract, has_reputation_bonus_applied, set_reputation_bonus_applied, get_milestone_configs, set_milestone_configs, get_milestone_status, set_milestone_status, get_emergency_pause_duration, is_nullifier_used, set_nullifier_used, get_commitment, set_commitment, mark_commitment_used, add_privacy_claim_event, add_merkle_root, get_merkle_roots, is_valid_merkle_root, get_path_payment_config, set_path_payment_config, get_path_payment_claim_history, add_path_payment_claim_event};
 use emergency::{AuditorPauseRequest, EmergencyPause, EmergencyPauseTriggered, EmergencyPauseLifted};
 
 #[contract]
@@ -593,5 +593,253 @@ impl VestingVault {
         // TODO: Implement privacy mode toggle
         // This would allow users to enable/disable privacy for their vesting
         // For now, this is a placeholder for the architectural foundation
+    }
+
+    // ========== ISSUE #146 & #93: Stellar Horizon Path Payment Claim ==========
+    
+    /// Configure path payment settings for auto-exit feature
+    /// This allows users to claim tokens and instantly swap them for USDC in one transaction
+    pub fn configure_path_payment(e: Env, admin: Address, destination_asset: Address, min_destination_amount: i128, path: Vec<Address>) {
+        admin.require_auth();
+        
+        let config = PathPaymentConfig {
+            destination_asset: destination_asset.clone(),
+            min_destination_amount,
+            path: path.clone(),
+            enabled: true,
+        };
+        
+        set_path_payment_config(&e, &config);
+        
+        // Emit configuration event
+        e.events().publish(
+            ("PathPaymentConfigured", (), ()),
+            (destination_asset, min_destination_amount, path, e.ledger().timestamp()),
+        );
+    }
+    
+    /// Disable path payment feature
+    pub fn disable_path_payment(e: Env, admin: Address) {
+        admin.require_auth();
+        
+        if let Some(mut config) = get_path_payment_config(&e) {
+            config.enabled = false;
+            set_path_payment_config(&e, &config);
+            
+            // Emit disable event
+            e.events().publish(
+                ("PathPaymentDisabled", (), ()),
+                (e.ledger().timestamp(),),
+            );
+        }
+    }
+    
+    /// Claim tokens with automatic path payment to USDC (Auto-Exit feature)
+    /// This allows users to instantly swap their claimed tokens for USDC in one transaction
+    pub fn claim_with_path_payment(e: Env, user: Address, vesting_id: u32, amount: i128, min_destination_amount: Option<i128>) {
+        user.require_auth();
+
+        // Check if contract is under emergency pause
+        if let Some(pause) = get_emergency_pause(&e) {
+            if pause.is_active {
+                let current_time = e.ledger().timestamp();
+                if current_time < pause.expires_at {
+                    panic!("Contract is under emergency pause until {}", pause.expires_at);
+                } else {
+                    // Pause expired, remove it
+                    remove_emergency_pause(&e);
+                }
+            }
+        }
+
+        // Get path payment configuration
+        let config = get_path_payment_config(&e)
+            .expect("Path payment not configured");
+
+        if !config.enabled {
+            panic!("Path payment feature is disabled");
+        }
+
+        // Use provided min_destination_amount or fallback to config
+        let final_min_amount = min_destination_amount.unwrap_or(config.min_destination_amount);
+        
+        // Validate the amount
+        if final_min_amount <= 0 {
+            panic!("Minimum destination amount must be positive");
+        }
+
+        // TODO: Calculate actual vesting amounts and validate claim
+        // This would integrate with the existing vesting logic
+        let actual_claimable_amount = amount; // Placeholder - should calculate based on vesting schedule
+        
+        if actual_claimable_amount <= 0 {
+            panic!("No tokens available to claim");
+        }
+
+        // Execute the path payment using Stellar's built-in path_payment_strict_receive
+        // This is the core of the Auto-Exit feature
+        let destination_amount = Self::execute_path_payment(&e, &user, actual_claimable_amount, &config.destination_asset, final_min_amount, &config.path);
+        
+        // Record the path payment claim event
+        let current_time = e.ledger().timestamp();
+        let path_payment_event = PathPaymentClaimEvent {
+            beneficiary: user.clone(),
+            source_amount: actual_claimable_amount,
+            destination_amount,
+            destination_asset: config.destination_asset.clone(),
+            timestamp: current_time,
+            vesting_id,
+        };
+        
+        add_path_payment_claim_event(&e, &path_payment_event);
+        
+        // Also record in regular claim history for compatibility
+        let mut history = get_claim_history(&e);
+        let claim_event = ClaimEvent {
+            beneficiary: user.clone(),
+            amount: actual_claimable_amount,
+            timestamp: current_time,
+            vesting_id,
+        };
+        history.push_back(claim_event);
+        set_claim_history(&e, &history);
+        
+        // Emit the path payment claim event
+        e.events().publish(
+            ("PathPaymentClaimExecuted", (), ()),
+            (user.clone(), actual_claimable_amount, destination_amount, config.destination_asset.clone(), current_time, vesting_id),
+        );
+    }
+    
+    /// Simulate a path payment claim to show expected amounts without consuming gas
+    pub fn simulate_path_payment_claim(e: Env, user: Address, vesting_id: u32, amount: i128, min_destination_amount: Option<i128>) -> PathPaymentSimulation {
+        let current_time = e.ledger().timestamp();
+        
+        // Check if contract is under emergency pause
+        if let Some(pause) = get_emergency_pause(&e) {
+            if pause.is_active && current_time < pause.expires_at {
+                return PathPaymentSimulation {
+                    source_amount: amount,
+                    estimated_destination_amount: 0,
+                    min_destination_amount: min_destination_amount.unwrap_or(0),
+                    path: Vec::new(&e),
+                    can_execute: false,
+                    reason: String::from_str(&e, "Contract is under emergency pause"),
+                    estimated_gas_fee: 0,
+                };
+            }
+        }
+        
+        // Check if path payment is configured and enabled
+        let config = match get_path_payment_config(&e) {
+            Some(c) => c,
+            None => {
+                return PathPaymentSimulation {
+                    source_amount: amount,
+                    estimated_destination_amount: 0,
+                    min_destination_amount: min_destination_amount.unwrap_or(0),
+                    path: Vec::new(&e),
+                    can_execute: false,
+                    reason: String::from_str(&e, "Path payment not configured"),
+                    estimated_gas_fee: 0,
+                };
+            }
+        };
+        
+        if !config.enabled {
+            return PathPaymentSimulation {
+                source_amount: amount,
+                estimated_destination_amount: 0,
+                min_destination_amount: min_destination_amount.unwrap_or(0),
+                path: config.path.clone(),
+                can_execute: false,
+                reason: String::from_str(&e, "Path payment feature is disabled"),
+                estimated_gas_fee: 0,
+            };
+        }
+        
+        // Use provided min_destination_amount or fallback to config
+        let final_min_amount = min_destination_amount.unwrap_or(config.min_destination_amount);
+        
+        // TODO: Calculate actual vesting amounts
+        // This would integrate with the existing vesting logic
+        let actual_claimable_amount = amount; // Placeholder
+        
+        if actual_claimable_amount <= 0 {
+            return PathPaymentSimulation {
+                source_amount: amount,
+                estimated_destination_amount: 0,
+                min_destination_amount: final_min_amount,
+                path: config.path.clone(),
+                can_execute: false,
+                reason: String::from_str(&e, "No tokens available to claim"),
+                estimated_gas_fee: 0,
+            };
+        }
+        
+        // Simulate the path payment (in real implementation, this would query Stellar DEX)
+        let estimated_destination_amount = Self::simulate_path_payment_result(&e, actual_claimable_amount, &config.destination_asset, &config.path);
+        
+        let can_execute = estimated_destination_amount >= final_min_amount;
+        
+        PathPaymentSimulation {
+            source_amount: actual_claimable_amount,
+            estimated_destination_amount,
+            min_destination_amount: final_min_amount,
+            path: config.path.clone(),
+            can_execute,
+            reason: if can_execute {
+                String::from_str(&e, "Path payment claim available")
+            } else {
+                String::from_str(&e, "Insufficient liquidity for minimum destination amount")
+            },
+            estimated_gas_fee: 150000u64, // Higher gas fee due to path payment complexity
+        }
+    }
+    
+    /// Get current path payment configuration
+    pub fn get_path_payment_config(e: Env) -> Option<PathPaymentConfig> {
+        get_path_payment_config(&e)
+    }
+    
+    /// Get path payment claim history
+    pub fn get_path_payment_claim_history(e: Env) -> Vec<PathPaymentClaimEvent> {
+        get_path_payment_claim_history(&e)
+    }
+    
+    /// Internal function to execute the path payment using Stellar's path_payment_strict_receive
+    /// This is the core logic that enables the Auto-Exit feature
+    fn execute_path_payment(e: &Env, beneficiary: &Address, source_amount: i128, destination_asset: &Address, min_destination_amount: i128, path: &Vec<Address>) -> i128 {
+        // In a real Stellar Soroban implementation, this would use the built-in
+        // path_payment_strict_receive function from the Stellar SDK
+        
+        // For this implementation, we simulate the path payment execution
+        // In production, this would be:
+        // e.invoke_contract::<i128>(
+        //     &stellar_sdk::STELLAR_ASSET_CONTRACT,
+        //     &symbol_short!("path_payment_strict_receive"),
+        //     (beneficiary, source_amount, destination_asset, min_destination_amount, path)
+        // );
+        
+        // Placeholder implementation - simulate successful path payment
+        let simulated_destination_amount = Self::simulate_path_payment_result(e, source_amount, destination_asset, path);
+        
+        if simulated_destination_amount < min_destination_amount {
+            panic!("Path payment failed: insufficient liquidity for minimum destination amount");
+        }
+        
+        simulated_destination_amount
+    }
+    
+    /// Internal function to simulate path payment result
+    /// In production, this would query the Stellar DEX for real rates
+    fn simulate_path_payment_result(_e: &Env, source_amount: i128, _destination_asset: &Address, _path: &Vec<Address>) -> i128 {
+        // Placeholder: assume 1:1 conversion rate for simulation
+        // In production, this would query the Stellar DEX for actual exchange rates
+        // considering the provided path and current market conditions
+        
+        // For USDC destination, we can assume close to 1:1 with small slippage
+        let slippage_factor = 9950; // 99.5% (0.5% slippage)
+        (source_amount * slippage_factor) / 10000
     }
 }

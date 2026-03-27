@@ -1,5 +1,5 @@
 use soroban_sdk::{Env, Vec, Address, Map};
-use crate::types::{ClaimEvent, AuthorizedPayoutAddress, AddressWhitelistRequest, Nullifier, Commitment};
+use crate::types::{ClaimEvent, AuthorizedPayoutAddress, AddressWhitelistRequest, Nullifier, Commitment, PathPaymentConfig, PathPaymentClaimEvent};
 
 pub const CLAIM_HISTORY: &str = "CLAIM_HISTORY";
 pub const AUTHORIZED_PAYOUT_ADDRESS: &str = "AUTHORIZED_PAYOUT_ADDRESS";
@@ -23,6 +23,10 @@ pub const NULLIFIER_MAP: &str = "NULLIFIER_MAP";
 pub const COMMITMENT_STORAGE: &str = "COMMITMENT_STORAGE";
 pub const PRIVACY_CLAIM_HISTORY: &str = "PRIVACY_CLAIM_HISTORY";
 pub const MERKLE_ROOTS: &str = "MERKLE_ROOTS";
+
+// Stellar Horizon Path Payment Claim storage keys
+pub const PATH_PAYMENT_CONFIG: &str = "PATH_PAYMENT_CONFIG";
+pub const PATH_PAYMENT_CLAIM_HISTORY: &str = "PATH_PAYMENT_CLAIM_HISTORY";
 
 // 48 hours in seconds
 const TIMELOCK_DURATION: u64 = 172_800;
@@ -209,4 +213,26 @@ pub fn get_merkle_roots(e: &Env) -> Vec<[u8; 32]> {
 pub fn is_valid_merkle_root(e: &Env, merkle_root: &[u8; 32]) -> bool {
     let roots = get_merkle_roots(e);
     roots.contains(merkle_root)
+}
+
+// Stellar Horizon Path Payment Claim storage functions
+pub fn get_path_payment_config(e: &Env) -> Option<PathPaymentConfig> {
+    e.storage().instance().get(&PATH_PAYMENT_CONFIG)
+}
+
+pub fn set_path_payment_config(e: &Env, config: &PathPaymentConfig) {
+    e.storage().instance().set(&PATH_PAYMENT_CONFIG, config);
+}
+
+pub fn get_path_payment_claim_history(e: &Env) -> Vec<PathPaymentClaimEvent> {
+    e.storage()
+        .instance()
+        .get(&PATH_PAYMENT_CLAIM_HISTORY)
+        .unwrap_or(Vec::new(e))
+}
+
+pub fn add_path_payment_claim_event(e: &Env, event: &PathPaymentClaimEvent) {
+    let mut history = get_path_payment_claim_history(e);
+    history.push_back(event.clone());
+    e.storage().instance().set(&PATH_PAYMENT_CLAIM_HISTORY, &history);
 }
