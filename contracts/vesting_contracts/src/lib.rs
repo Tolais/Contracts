@@ -31,6 +31,10 @@ pub use stake::{
 };
 
 pub mod inheritance;
+pub mod kpi_engine;
+pub mod kpi_vesting;
+#[cfg(test)]
+mod kpi_test;
 pub use inheritance::{
     SuccessionState, SuccessionView, InheritanceError,
     NominatedData, ClaimPendingData, SucceededData,
@@ -96,6 +100,10 @@ pub enum DataKey {
     AdminProposalSignature(u64, Address), // bool (signed)
     AdminProposalCount, // u64
     VaultSuccession(u64),
+    // KPI Vesting Gates (Issue #145/#92)
+    KpiConfig(u64),
+    KpiMet(u64),
+    KpiLog(u64),
     // --- Added missing variants ---
     NFTMinter,
     CollateralBridge,
@@ -151,6 +159,7 @@ pub enum AdminAction {
     GlobalAccelerationPct,
     RevokedVaults,
     VaultSuccession(u64),
+    // KPI Vesting Gates (Issue #145/#92)
     // Anti-Dilution Configuration
     AntiDilutionConfig(u64),
     NetworkGrowthSnapshot(u64),
@@ -2842,6 +2851,56 @@ impl VestingContract {
         Self::require_admin(&env);
         Self::do_renew_vault_direct(&env, vault_id, additional_duration, additional_amount);
     }
+}
+
+    // ── Issue #145 / #92: KPI Vesting Gate public functions ──────────────
+
+    /// Admin attaches a KPI gate to a vault.
+    /// Tokens cannot be claimed until `verify_kpi_gate` is called and passes.
+    pub fn attach_kpi_gate(
+        env: Env,
+        vault_id: u64,
+        oracle_contract: Address,
+        metric_id: Symbol,
+        threshold: i128,
+        operator: crate::oracle::ComparisonOperator,
+    ) {
+        Self::require_admin(&env);
+        crate::kpi_vesting::attach_kpi_gate(
+            &env,
+            vault_id,
+            oracle_contract,
+            metric_id,
+            threshold,
+            operator,
+        );
+    }
+
+    /// Anyone can call this to attempt oracle verification.
+    /// Idempotent — safe to call multiple times.
+    pub fn verify_kpi_gate(env: Env, vault_id: u64, caller: Address) -> bool {
+        caller.require_auth();
+        crate::kpi_vesting::try_verify_kpi(&env, vault_id, &caller)
+    }
+
+    /// Read-only: has this vault's KPI been verified?
+    pub fn get_kpi_status(env: Env, vault_id: u64) -> bool {
+        crate::kpi_vesting::kpi_status(&env, vault_id)
+    }
+
+    /// Read-only: configured threshold for a vault (0 if no gate set).
+    pub fn get_kpi_threshold(env: Env, vault_id: u64) -> i128 {
+        crate::kpi_vesting::kpi_threshold(&env, vault_id)
+    }
+
+    /// Read-only: full verification log.
+    pub fn get_kpi_log(
+        env: Env,
+        vault_id: u64,
+    ) -> soroban_sdk::Vec<crate::kpi_engine::KpiVerificationRecord> {
+        crate::kpi_vesting::kpi_verification_log(&env, vault_id)
+    }
+
 }
 
 // Test modules temporarily disabled to allow iterative compilation while
