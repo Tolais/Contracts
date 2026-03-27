@@ -7,8 +7,8 @@ mod types;
 mod audit_exporter;
 mod emergency;
 
-use types::{ClaimEvent, AuthorizedAddressSet, AddressWhitelistRequest, AuthorizedPayoutAddress, MilestoneConfig, MilestoneStatus, MilestoneCompleted, ClaimSimulation, ReputationBonus, ReputationBonusApplied};
-use storage::{get_claim_history, set_claim_history, get_authorized_payout_address as storage_get_authorized_payout_address, set_authorized_payout_address as storage_set_authorized_payout_address, get_pending_address_request as storage_get_pending_address_request, set_pending_address_request as storage_set_pending_address_request, remove_pending_address_request as storage_remove_pending_address_request, get_timelock_duration, get_auditors, set_auditors, get_auditor_pause_requests, set_auditor_pause_requests, get_emergency_pause, set_emergency_pause, remove_emergency_pause, get_reputation_bridge_contract, set_reputation_bridge_contract, has_reputation_bonus_applied, set_reputation_bonus_applied, get_milestone_configs, set_milestone_configs, get_milestone_status, set_milestone_status, get_emergency_pause_duration};
+use types::{ClaimEvent, AuthorizedAddressSet, AddressWhitelistRequest, AuthorizedPayoutAddress, MilestoneConfig, MilestoneStatus, MilestoneCompleted, ClaimSimulation, ReputationBonus, ReputationBonusApplied, Nullifier, Commitment, ZKClaimProof, PrivacyClaimEvent, CommitmentCreated, PrivateClaimExecuted};
+use storage::{get_claim_history, set_claim_history, get_authorized_payout_address as storage_get_authorized_payout_address, set_authorized_payout_address as storage_set_authorized_payout_address, get_pending_address_request as storage_get_pending_address_request, set_pending_address_request as storage_set_pending_address_request, remove_pending_address_request as storage_remove_pending_address_request, get_timelock_duration, get_auditors, set_auditors, get_auditor_pause_requests, set_auditor_pause_requests, get_emergency_pause, set_emergency_pause, remove_emergency_pause, get_reputation_bridge_contract, set_reputation_bridge_contract, has_reputation_bonus_applied, set_reputation_bonus_applied, get_milestone_configs, set_milestone_configs, get_milestone_status, set_milestone_status, get_emergency_pause_duration, is_nullifier_used, set_nullifier_used, get_commitment, set_commitment, mark_commitment_used, add_privacy_claim_event, add_merkle_root, get_merkle_roots, is_valid_merkle_root};
 use emergency::{AuditorPauseRequest, EmergencyPause, EmergencyPauseTriggered, EmergencyPauseLifted};
 
 #[contract]
@@ -423,5 +423,175 @@ impl VestingVault {
     /// Get milestone configuration for a vesting schedule
     pub fn get_milestone_config(e: Env, vesting_id: u32) -> Option<Vec<u32>> {
         get_milestone_configs(&e, vesting_id)
+    }
+
+    // ========== ISSUE #148 & #95: Zero-Knowledge Privacy Claims Foundation ==========
+    
+    /// Create a commitment for future private claims
+    /// This function allows users to create a commitment that can be used for private claims later
+    pub fn create_commitment(e: Env, user: Address, vesting_id: u32, amount: i128, commitment_hash: [u8; 32]) {
+        user.require_auth();
+        
+        // Check if commitment already exists
+        if get_commitment(&e, &commitment_hash).is_some() {
+            panic!("Commitment already exists");
+        }
+        
+        let current_time = e.ledger().timestamp();
+        
+        // Create the commitment
+        let commitment = Commitment {
+            hash: commitment_hash,
+            created_at: current_time,
+            vesting_id,
+            amount,
+            is_used: false,
+        };
+        
+        // Store the commitment
+        set_commitment(&e, &commitment_hash, &commitment);
+        
+        // Emit event
+        e.events().publish(
+            ("CommitmentCreated", (), ()),
+            (commitment_hash, vesting_id, amount, current_time),
+        );
+    }
+    
+    /// Execute a private claim using ZK proof
+    /// This function allows users to claim tokens without revealing their identity
+    pub fn private_claim(e: Env, zk_proof: ZKClaimProof, nullifier: Nullifier, amount: i128) {
+        // No require_auth() - this is a privacy feature
+        
+        // Check if contract is under emergency pause
+        if let Some(pause) = get_emergency_pause(&e) {
+            if pause.is_active {
+                let current_time = e.ledger().timestamp();
+                if current_time < pause.expires_at {
+                    panic!("Contract is under emergency pause until {}", pause.expires_at);
+                } else {
+                    // Pause expired, remove it
+                    remove_emergency_pause(&e);
+                }
+            }
+        }
+        
+        // Check if nullifier has already been used (prevent double-spending)
+        if is_nullifier_used(&e, &nullifier) {
+            panic!("Nullifier has already been used");
+        }
+        
+        // Verify the commitment exists and is not used
+        let commitment = get_commitment(&e, &zk_proof.commitment_hash)
+            .expect("Commitment not found");
+        
+        if commitment.is_used {
+            panic!("Commitment has already been used");
+        }
+        
+        // Verify the commitment amount matches the claim amount
+        if commitment.amount != amount {
+            panic!("Claim amount does not match commitment amount");
+        }
+        
+        // Verify the Merkle root is valid (for ZK proof verification)
+        if !is_valid_merkle_root(&e, &zk_proof.merkle_root) {
+            panic!("Invalid Merkle root");
+        }
+        
+        // TODO: Verify actual ZK-SNARK proof
+        // This is a placeholder for the actual ZK proof verification
+        // In a full implementation, this would use a ZK verification library
+        Self::verify_zk_proof(&e, &zk_proof);
+        
+        // Mark nullifier as used
+        set_nullifier_used(&e, &nullifier);
+        
+        // Mark commitment as used
+        mark_commitment_used(&e, &zk_proof.commitment_hash);
+        
+        // Create privacy claim event
+        let current_time = e.ledger().timestamp();
+        let privacy_event = PrivacyClaimEvent {
+            nullifier: nullifier.clone(),
+            amount,
+            timestamp: current_time,
+            vesting_id: commitment.vesting_id,
+            is_private: true,
+        };
+        
+        // Add to privacy claim history
+        add_privacy_claim_event(&e, &privacy_event);
+        
+        // Emit event
+        e.events().publish(
+            ("PrivateClaimExecuted", (), ()),
+            (nullifier.hash, amount, current_time),
+        );
+        
+        // TODO: Execute actual token transfer
+        // This would integrate with the existing vesting logic
+    }
+    
+    /// Add a Merkle root for ZK proof verification
+    /// This function is called by the admin to add new Merkle roots
+    pub fn add_merkle_root_admin(e: Env, admin: Address, merkle_root: [u8; 32]) {
+        admin.require_auth();
+        
+        // Check if Merkle root already exists
+        if is_valid_merkle_root(&e, &merkle_root) {
+            panic!("Merkle root already exists");
+        }
+        
+        // Add the Merkle root
+        add_merkle_root(&e, &merkle_root);
+    }
+    
+    /// Get all valid Merkle roots
+    pub fn get_merkle_roots(e: Env) -> Vec<[u8; 32]> {
+        get_merkle_roots(&e)
+    }
+    
+    /// Check if a nullifier has been used
+    pub fn is_nullifier_used_public(e: Env, nullifier: Nullifier) -> bool {
+        is_nullifier_used(&e, &nullifier)
+    }
+    
+    /// Get commitment information
+    pub fn get_commitment_info(e: Env, commitment_hash: [u8; 32]) -> Option<Commitment> {
+        get_commitment(&e, &commitment_hash)
+    }
+    
+    /// Get privacy claim history
+    pub fn get_privacy_claim_history(e: Env) -> Vec<PrivacyClaimEvent> {
+        storage::get_privacy_claim_history(&e)
+    }
+    
+    /// Placeholder for ZK proof verification
+    /// In a full implementation, this would verify the actual ZK-SNARK proof
+    fn verify_zk_proof(_e: &Env, _zk_proof: &ZKClaimProof) -> bool {
+        // TODO: Implement actual ZK proof verification
+        // For now, we'll assume the proof is valid
+        // In production, this would integrate with a ZK verification library
+        true
+    }
+    
+    /// Enable privacy mode for a vesting schedule
+    /// This allows beneficiaries to choose between public and private claims
+    pub fn enable_privacy_mode(e: Env, user: Address, vesting_id: u32) {
+        user.require_auth();
+        
+        // TODO: Implement privacy mode toggle
+        // This would allow users to enable/disable privacy for their vesting
+        // For now, this is a placeholder for the architectural foundation
+    }
+    
+    /// Disable privacy mode for a vesting schedule
+    pub fn disable_privacy_mode(e: Env, user: Address, vesting_id: u32) {
+        user.require_auth();
+        
+        // TODO: Implement privacy mode toggle
+        // This would allow users to enable/disable privacy for their vesting
+        // For now, this is a placeholder for the architectural foundation
     }
 }

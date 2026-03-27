@@ -94,3 +94,54 @@ pub struct ReputationBonusApplied {
     pub cliff_reduction_months: u32,
     pub applied_at: u64,
 }
+
+// Zero-Knowledge Privacy Claims types
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Nullifier {
+    pub hash: [u8; 32], // 256-bit hash
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Commitment {
+    pub hash: [u8; 32], // 256-bit hash
+    pub created_at: u64,
+    pub vesting_id: u32,
+    pub amount: i128,
+    pub is_used: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ZKClaimProof {
+    pub commitment_hash: [u8; 32],
+    pub nullifier_hash: [u8; 32],
+    pub merkle_root: [u8; 32],
+    pub proof_data: Vec<u8>, // Placeholder for actual ZK-SNARK proof
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct PrivacyClaimEvent {
+    pub nullifier: Nullifier,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub vesting_id: u32,
+    pub is_private: bool,
+}
+
+#[contractevent]
+pub struct CommitmentCreated {
+    pub commitment_hash: [u8; 32],
+    pub vesting_id: u32,
+    pub amount: i128,
+    pub created_at: u64,
+}
+
+#[contractevent]
+pub struct PrivateClaimExecuted {
+    pub nullifier_hash: [u8; 32],
+    pub amount: i128,
+    pub timestamp: u64,
+}
