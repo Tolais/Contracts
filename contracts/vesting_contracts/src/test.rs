@@ -1428,3 +1428,132 @@ fn test_full_happy_path_nominate_claim_finalise_new_owner_verified() {
         panic!("Expected Succeeded state");
     }
 }
+#[test]
+fn test_sub_vault_delegation() {
+    let (env, _, client, admin, token) = setup();
+    let sub_admin = Address::generate(&env);
+    let team_member = Address::generate(&env);
+    
+    // 1. Admin grants rights
+    // Note: We'll use the direct call for testing if allowed, 
+    // but the implementation requires AdminProposal usually.
+    // In our tests mock_all_auths is on.
+    
+    // We need to bypass the "panic!("Admin actions must be executed via AdminProposal...")" 
+    // if we call the regular public methods that are gated.
+    // Actually, GrantManagerRights is only in dispatch_admin_action in my last edit.
+    // So I should proprose it.
+    
+    let action = crate::AdminAction::GrantManagerRights(sub_admin.clone(), token.clone(), 50_000i128);
+    client.propose_admin_action(&admin, &action);
+    
+    // 2. Sub-admin creates vault
+    let now = env.ledger().timestamp();
+    let vault_id = client.sub_admin_create_vault(
+        &sub_admin,
+        &team_member,
+        &10_000i128,
+        &now,
+        &(now + 1000),
+        &0i128,
+        &false,
+        &false,
+        &0u64,
+        &String::from_str(&env, "Team Lead's Vault")
+    );
+    
+    assert_eq!(vault_id, 1);
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.owner, team_member);
+    assert_eq!(vault.delegate, Some(sub_admin.clone()));
+    
+    // 3. Sub-admin revokes vault
+    client.sub_admin_revoke_vault(&sub_admin, &vault_id);
+    let updated_vault = client.get_vault(&vault_id);
+    assert!(updated_vault.is_frozen);
+}
+
+#[test]
+fn test_marketplace_listing_and_sale() {
+    let (env, _, client, _admin, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let marketplace = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    
+    let vault_id = client.create_vault_full(
+        &beneficiary,
+        &1000i128,
+        &now,
+        &(now + 1000),
+        &0i128,
+        &false,
+        &true, // must be transferable
+        &0u64
+    );
+    
+    // 1. Beneficiary authorizes marketplace
+    client.authorize_transfer_to_marketplace(&vault_id, &marketplace);
+    
+    // 2. Marketplace completes transfer to buyer
+    client.complete_marketplace_transfer(&vault_id, &buyer);
+    
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.owner, buyer);
+}
+
+#[test]
+#[should_panic(expected = "Claim would leave insufficient XLM for gas (need 2 XLM reserve)")]
+fn test_xlm_gas_reserve() {
+    let (env, _, client, admin, xlm_token) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    
+    // Set XLM address in contract
+    let action = crate::AdminAction::SetXLMAddress(xlm_token.clone());
+    client.propose_admin_action(&admin, &action);
+    
+    // Create XLM vault with 5 XLM
+    let total_xlm = 50_000_000i128; // 5 XLM
+    let vault_id = client.create_vault_full(
+        &beneficiary,
+        &total_xlm,
+        &now,
+        &(now + 1000),
+        &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+    
+    // Fast forward to end
+    env.ledger().set_timestamp(now + 1000);
+    
+    // Try to claim 4 XLM (leaving 1 XLM) - should fail
+    client.claim_tokens(&vault_id, &40_000_000i128);
+}
+
+#[test]
+fn test_vault_renewal() {
+    let (env, _, client, admin, _) = setup();
+    let beneficiary = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    
+    let vault_id = client.create_vault_full(
+        &beneficiary,
+        &1000i128,
+        &now,
+        &(now + 1000),
+        &0i128,
+        &false,
+        &false,
+        &0u64
+    );
+    
+    // Renew: add 1000 seconds and 500 tokens
+    client.renew_schedule(&vault_id, &1000u64, &500i128);
+    
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.end_time, now + 2000);
+    assert_eq!(vault.allocations.get(0).unwrap().total_amount, 1500);
+}

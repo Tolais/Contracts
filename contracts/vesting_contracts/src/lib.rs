@@ -94,6 +94,25 @@ pub enum DataKey {
     MetadataAnchor,
     VotingDelegate(Address),
     DelegatedBeneficiaries(Address),
+    SubAdminPool(Address),
+    MarketplaceLock(u64),
+    XLMAddress,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubAdminPool {
+    pub manager: Address,
+    pub asset: Address,
+    pub total_amount: i128,
+    pub distributed_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarketplaceLock {
+    pub marketplace: Address,
+    pub authorized_at: u64,
 }
 
 #[contracttype]
@@ -116,6 +135,9 @@ pub enum AdminAction {
     // Anti-Dilution Configuration
     AntiDilutionConfig(u64),
     NetworkGrowthSnapshot(u64),
+    GrantManagerRights(Address, Address, i128), // Manager, Asset, Amount
+    RenewSchedule(u64, u64, i128), // VaultID, AdditionalDuration, AdditionalAmount
+    SetXLMAddress(Address),
 }
 
 #[contracttype]
@@ -361,6 +383,25 @@ impl VestingContract {
                     cfg.step_duration,
                     true,
                 );
+            },
+            AdminAction::GrantManagerRights(manager, asset, amount) => {
+                let pool = SubAdminPool {
+                    manager: manager.clone(),
+                    asset: asset.clone(),
+                    total_amount: amount,
+                    distributed_amount: 0,
+                };
+                env.storage().instance().set(&DataKey::SubAdminPool(manager), &pool);
+                
+                // Transfer tokens from admin to contract to fund the pool
+                let admin = Self::get_admin(env.clone());
+                token::Client::new(&env, &asset).transfer(&admin, &env.current_contract_address(), &amount);
+            },
+            AdminAction::RenewSchedule(vault_id, duration, amount) => {
+                Self::do_renew_vault_direct(&env, vault_id, duration, amount);
+            },
+            AdminAction::SetXLMAddress(xlm) => {
+                env.storage().instance().set(&DataKey::XLMAddress, &xlm);
             },
             _ => {
                 // For other actions, no-op or extend as needed
@@ -976,7 +1017,20 @@ impl VestingContract {
         // Calculate and claim each asset in the basket
         for (i, allocation) in vault.allocations.iter().enumerate() {
             let vested_amount = Self::calculate_claimable_for_asset(&env, vault_id, &vault, i);
-            let claimable_amount = vested_amount - allocation.released_amount;
+            let mut claimable_amount = vested_amount - allocation.released_amount;
+
+            // #90: XLM Minimum Reserve Check (2 XLM = 20,000,000 Stroops)
+            let xlm: Option<Address> = env.storage().instance().get(&DataKey::XLMAddress);
+            if let Some(xlm_addr) = xlm {
+                if allocation.asset_id == xlm_addr {
+                    let total_unreleased = allocation.total_amount - allocation.released_amount;
+                    if total_unreleased <= 20_000_000 {
+                        claimable_amount = 0;
+                    } else if (total_unreleased - claimable_amount) < 20_000_000 {
+                        claimable_amount = total_unreleased - 20_000_000;
+                    }
+                }
+            }
 
             if claimable_amount > 0 {
                 // Update the allocation's released amount
@@ -1045,10 +1099,17 @@ impl VestingContract {
 
         env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
 
-        let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
-        let contract_addr = env.current_contract_address();
-        token::Client::new(&env, &token).transfer(&contract_addr, &vault.owner, &claim_amount);
-        
+        // #90: XLM Minimum Reserve Check
+        let xlm: Option<Address> = env.storage().instance().get(&DataKey::XLMAddress);
+        if let Some(xlm_addr) = xlm {
+            if allocation.asset_id == xlm_addr {
+                let total_left = allocation.total_amount - (allocation.released_amount + claim_amount);
+                if total_left < 20_000_000 {
+                    panic!("Claim would leave insufficient XLM for gas (need 2 XLM reserve)");
+                }
+            }
+        }
+
         token::Client::new(&env, &allocation.asset_id)
             .transfer(&env.current_contract_address(), &vault.owner, &claim_amount);
 
@@ -2634,6 +2695,72 @@ impl VestingContract {
 
     pub fn get_total_locked(env: Env) -> i128 {
     VestingContract::get_total_locked_value(&env)
+    }
+
+    // --- Marketplace Functions (#89) ---
+
+    pub fn authorize_transfer_to_marketplace(env: Env, vault_id: u64, marketplace: Address) {
+        let vault = Self::get_vault_internal(&env, vault_id);
+        vault.owner.require_auth();
+        if !vault.is_transferable {
+            panic!("Vault not transferable");
+        }
+        let lock = MarketplaceLock {
+            marketplace,
+            authorized_at: env.ledger().timestamp(),
+        };
+        env.storage().instance().set(&DataKey::MarketplaceLock(vault_id), &lock);
+    }
+
+    pub fn complete_marketplace_transfer(env: Env, vault_id: u64, new_owner: Address) {
+        let lock: MarketplaceLock = env.storage().instance().get(&DataKey::MarketplaceLock(vault_id)).expect("Vault not authorized for marketplace");
+        lock.marketplace.require_auth();
+        
+        let mut vault = Self::get_vault_internal(&env, vault_id);
+        let old_owner = vault.owner.clone();
+        
+        // Update owner
+        vault.owner = new_owner.clone();
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+        
+        // Update indexes
+        Self::remove_user_vault_index(&env, &old_owner, vault_id);
+        Self::add_user_vault_index(&env, &new_owner, vault_id);
+        
+        // Clear lock
+        env.storage().instance().remove(&DataKey::MarketplaceLock(vault_id));
+        
+        env.events().publish(
+            (Symbol::new(&env, "vault_marketplace_sold"), vault_id),
+            (old_owner, new_owner, lock.marketplace),
+        );
+    }
+
+    // --- Renewal Functions (#91) ---
+
+    fn do_renew_vault_direct(env: &Env, vault_id: u64, additional_duration: u64, additional_amount: i128) {
+        let mut vault = Self::get_vault_internal(env, vault_id);
+        
+        // Find main asset (first one)
+        let mut allocation = vault.allocations.get(0).expect("Empty basket");
+        let asset_id = allocation.asset_id.clone();
+        
+        // Fund extra from admin
+        let admin = Self::get_admin(env.clone());
+        token::Client::new(env, &asset_id).transfer(&admin, &env.current_contract_address(), &additional_amount);
+        
+        allocation.total_amount += additional_amount;
+        vault.allocations.set(0, allocation);
+        vault.end_time += additional_duration;
+        
+        env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+        
+        env.events().publish((Symbol::new(env, "vault_renewed"), vault_id), (additional_duration, additional_amount));
+    }
+
+    pub fn renew_schedule(env: Env, vault_id: u64, additional_duration: u64, additional_amount: i128) {
+        Self::require_admin(&env);
+        Self::do_renew_vault_direct(&env, vault_id, additional_duration, additional_amount);
     }
 }
 
