@@ -148,6 +148,52 @@ fn e6_expo_after_end_capped_at_full() {
     assert_eq!(vested_at(&s.env, &s.vault, START + DURATION + 5000), TOTAL);
 }
 
+// ── Exponential Decay ───────────────────────────────────────────────────────
+
+#[test]
+fn d1_decay_at_start_is_zero() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+    assert_eq!(vested_at(&s.env, &s.vault, START), 0);
+}
+
+#[test]
+fn d2_decay_at_quarter_is_43_75_percent() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+    let elapsed = DURATION / 4;
+    let remaining = DURATION - elapsed;
+    let expected = TOTAL
+        - TOTAL * (remaining as i128 * remaining as i128)
+            / (DURATION as i128 * DURATION as i128);
+    let actual = vested_at(&s.env, &s.vault, START + elapsed);
+    assert_eq!(actual, expected, "decay 25% elapsed failed: got {actual}");
+}
+
+#[test]
+fn d3_decay_at_half_is_seventy_five_percent() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+    let expected = (TOTAL * 3) / 4; // 1 - 0.5^2 = 0.75
+    let actual = vested_at(&s.env, &s.vault, START + DURATION / 2);
+    assert_eq!(actual, expected, "decay 50% elapsed failed: got {actual}");
+}
+
+#[test]
+fn d4_decay_at_three_quarters_is_93_75_percent() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+    let elapsed = (DURATION * 3) / 4;
+    let remaining = DURATION - elapsed;
+    let expected = TOTAL
+        - TOTAL * (remaining as i128 * remaining as i128)
+            / (DURATION as i128 * DURATION as i128);
+    let actual = vested_at(&s.env, &s.vault, START + elapsed);
+    assert_eq!(actual, expected, "decay 75% elapsed failed: got {actual}");
+}
+
+#[test]
+fn d5_decay_at_end_is_full() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+    assert_eq!(vested_at(&s.env, &s.vault, START + DURATION), TOTAL);
+}
+
 // ── Comparison ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -162,6 +208,21 @@ fn c1_at_midpoint_exponential_less_than_linear() {
     assert!(
         expo_mid < linear_mid,
         "Expected expo ({expo_mid}) < linear ({linear_mid}) at midpoint"
+    );
+}
+
+#[test]
+fn c2_at_midpoint_decay_greater_than_linear() {
+    let sl = create_setup(VestingCurve::Linear);
+    let sd = create_setup(VestingCurve::ExponentialDecay);
+    let mid = START + DURATION / 2;
+
+    let linear_mid = vested_at(&sl.env, &sl.vault, mid);
+    let decay_mid = vested_at(&sd.env, &sd.vault, mid);
+
+    assert!(
+        decay_mid > linear_mid,
+        "Expected decay ({decay_mid}) > linear ({linear_mid}) at midpoint"
     );
 }
 
@@ -203,9 +264,11 @@ fn i2_exponential_claim_at_three_quarters() {
 fn i3_get_curve_returns_correct_variant() {
     let sl = create_setup(VestingCurve::Linear);
     let se = create_setup(VestingCurve::Exponential);
+    let sd = create_setup(VestingCurve::ExponentialDecay);
 
     assert_eq!(sl.vault.get_curve(), VestingCurve::Linear);
     assert_eq!(se.vault.get_curve(), VestingCurve::Exponential);
+    assert_eq!(sd.vault.get_curve(), VestingCurve::ExponentialDecay);
 }
 
 #[test]
@@ -251,6 +314,30 @@ fn i6_double_claim_only_yields_incremental_amount() {
     assert_eq!(second_claim, TOTAL - TOTAL / 4); // remaining 75 %
 
     // Total received = TOTAL
+    let bal = TokenClient::new(&s.env, &s.token).balance(&s.beneficiary);
+    assert_eq!(bal, TOTAL);
+}
+
+#[test]
+fn i7_decay_double_claim_only_yields_incremental_amount() {
+    let s = create_setup(VestingCurve::ExponentialDecay);
+
+    // First claim at 25 %
+    let elapsed = DURATION / 4;
+    s.env.ledger().with_mut(|l| l.timestamp = START + elapsed);
+    let first_claim = s.vault.claim();
+    assert_eq!(first_claim, 437_500_000);
+
+    // Advance to 50 %
+    s.env.ledger().with_mut(|l| l.timestamp = START + DURATION / 2);
+    let second_claim = s.vault.claim();
+    assert_eq!(second_claim, 312_500_000);
+
+    // Advance to 100 %
+    s.env.ledger().with_mut(|l| l.timestamp = START + DURATION);
+    let third_claim = s.vault.claim();
+    assert_eq!(third_claim, 250_000_000);
+
     let bal = TokenClient::new(&s.env, &s.token).balance(&s.beneficiary);
     assert_eq!(bal, TOTAL);
 }
@@ -349,7 +436,7 @@ fn z3_zero_duration_exponential_panics() {
 // ── Duration cap (Issue #44) ────────────────────────────────────────────────
 
 #[test]
-fn i7_initialize_allows_max_duration() {
+fn i8_initialize_allows_max_duration() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -382,7 +469,7 @@ fn i7_initialize_allows_max_duration() {
 
 #[test]
 #[should_panic(expected = "duration exceeds MAX_DURATION")]
-fn i8_initialize_rejects_duration_over_max() {
+fn i9_initialize_rejects_duration_over_max() {
     let env = Env::default();
     env.mock_all_auths();
 

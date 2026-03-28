@@ -24,6 +24,7 @@ const MAX_DURATION: u64 = 315_360_000;
 pub enum VestingCurve {
     Linear,
     Exponential,
+    ExponentialDecay,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,19 +101,44 @@ impl VestingVault {
             return total; // fully vested
         }
 
+        let elapsed_u128 = elapsed as u128;
+        let duration_u128 = duration as u128;
+        let duration_sq = duration_u128 * duration_u128;
+
         match curve {
             VestingCurve::Linear => (total * elapsed as i128) / duration as i128,
             VestingCurve::Exponential => {
-                let elapsed_u128  = elapsed as u128;
-                let duration_u128 = duration as u128;
-                let total_u128    = total as u128;
+                let elapsed_sq = elapsed_u128 * elapsed_u128;
+                Self::mul_fraction(total, elapsed_sq, duration_sq)
+            }
+            VestingCurve::ExponentialDecay => {
+                let remaining = duration - elapsed;
+                let remaining_u128 = remaining as u128;
+                let remaining_sq = remaining_u128 * remaining_u128;
 
-                let numerator   = total_u128 * elapsed_u128 * elapsed_u128;
-                let denominator = duration_u128 * duration_u128;
-
-                (numerator / denominator) as i128
+                // Front-loaded vesting: the locked portion decays quadratically,
+                // so the initial release rate is high and slows over time.
+                total - Self::mul_fraction(total, remaining_sq, duration_sq)
             }
         }
+    }
+
+    fn mul_fraction(total: i128, numerator: u128, denominator: u128) -> i128 {
+        assert!(denominator > 0, "denominator must be positive");
+        assert!(numerator <= denominator, "fraction must be <= 1");
+
+        let total_u128 = total as u128;
+
+        // For the vesting curves here numerator <= denominator, which lets us
+        // decompose the multiplication without overflowing u128 while still
+        // preserving floor(total * numerator / denominator) exactly.
+        let quotient = total_u128 / denominator;
+        let remainder = total_u128 % denominator;
+
+        let whole = quotient * numerator;
+        let fractional = (remainder * numerator) / denominator;
+
+        (whole + fractional) as i128
     }
 
     // -----------------------------------------------------------------------
