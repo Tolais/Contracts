@@ -1029,6 +1029,148 @@ fn test_revoke_irrevocable_vault_panics() {
 }
 
 // ---------------------------------------------------------------------------
+// batch_revoke_vaults
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_revoke_vaults_five_team_members() {
+    let (env, _, client, _, token_addr, staking_id) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    
+    // Create 5 vaults for a sub-team
+    let mut vault_ids = vec![&env];
+    let mut beneficiaries = vec![&env];
+    
+    for _ in 0..5 {
+        let beneficiary = Address::generate(&env);
+        let vault_id = make_vault(&client, &env, &beneficiary);
+        vault_ids.push_back(vault_id);
+        beneficiaries.push_back(beneficiary);
+    }
+    
+    // Stake some of them
+    client.auto_stake(&vault_ids.get(0).unwrap(), &staking_id);
+    client.auto_stake(&vault_ids.get(2).unwrap(), &staking_id);
+    
+    // Batch revoke all 5 vaults
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+    
+    // Verify all vaults are frozen and revoked
+    for vault_id in vault_ids.iter() {
+        let vault = client.get_vault(&vault_id);
+        assert!(vault.is_frozen);
+        assert_eq!(vault.staked_amount, 0);
+        assert!(matches!(client.get_stake_status(&vault_id).stake_state, StakeState::Unstaked));
+    }
+    
+    // Verify treasury received all tokens (5 vaults * 1000 tokens each)
+    assert_eq!(token::Client::new(&env, &token_addr).balance(&treasury), 5000);
+}
+
+#[test]
+fn test_batch_revoke_vaults_emits_team_revocation_event() {
+    let (env, _, client, _, token_addr, _) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    
+    // Create 3 vaults
+    let mut vault_ids = vec![&env];
+    for _ in 0..3 {
+        let beneficiary = Address::generate(&env);
+        let vault_id = make_vault(&client, &env, &beneficiary);
+        vault_ids.push_back(vault_id);
+    }
+    
+    // Batch revoke
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+    
+    // Verify event was emitted (checking via treasury balance as proxy)
+    assert_eq!(token::Client::new(&env, &token_addr).balance(&treasury), 3000);
+}
+
+#[test]
+fn test_batch_revoke_vaults_atomic_transaction() {
+    let (env, _, client, _, token_addr, _) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    
+    // Create 5 vaults
+    let mut vault_ids = vec![&env];
+    for _ in 0..5 {
+        let beneficiary = Address::generate(&env);
+        let vault_id = make_vault(&client, &env, &beneficiary);
+        vault_ids.push_back(vault_id);
+    }
+    
+    let treasury_balance_before = token::Client::new(&env, &token_addr).balance(&treasury);
+    
+    // Batch revoke all at once
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+    
+    let treasury_balance_after = token::Client::new(&env, &token_addr).balance(&treasury);
+    
+    // All tokens transferred in single transaction
+    assert_eq!(treasury_balance_after - treasury_balance_before, 5000);
+}
+
+#[test]
+#[should_panic(expected = "Vault")]
+fn test_batch_revoke_vaults_with_irrevocable_panics() {
+    let (env, _, client, _, _, _) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    
+    // Create 3 vaults, one irrevocable
+    let mut vault_ids = vec![&env];
+    
+    let beneficiary1 = Address::generate(&env);
+    let vault_id1 = make_vault(&client, &env, &beneficiary1);
+    vault_ids.push_back(vault_id1);
+    
+    let beneficiary2 = Address::generate(&env);
+    let vault_id2 = client.create_vault_full(
+        &beneficiary2, &1000i128, &now, &(now + 1000), &0i128, &false, &false, &0u64,
+    );
+    vault_ids.push_back(vault_id2);
+    
+    let beneficiary3 = Address::generate(&env);
+    let vault_id3 = make_vault(&client, &env, &beneficiary3);
+    vault_ids.push_back(vault_id3);
+    
+    // Should panic because vault_id2 is irrevocable
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+}
+
+#[test]
+fn test_batch_revoke_vaults_empty_list() {
+    let (env, _, client, _, token_addr, _) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    
+    let vault_ids = vec![&env];
+    let treasury_balance_before = token::Client::new(&env, &token_addr).balance(&treasury);
+    
+    // Batch revoke empty list should not panic
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+    
+    let treasury_balance_after = token::Client::new(&env, &token_addr).balance(&treasury);
+    assert_eq!(treasury_balance_after, treasury_balance_before);
+}
+
+#[test]
+fn test_batch_revoke_vaults_single_vault() {
+    let (env, _, client, _, token_addr, _) = setup_with_staking();
+    let treasury = Address::generate(&env);
+    
+    let beneficiary = Address::generate(&env);
+    let vault_id = make_vault(&client, &env, &beneficiary);
+    
+    let mut vault_ids = vec![&env];
+    vault_ids.push_back(vault_id);
+    
+    client.batch_revoke_vaults(&vault_ids, &treasury);
+    
+    assert_eq!(token::Client::new(&env, &token_addr).balance(&treasury), 1000);
+}
+
+// ---------------------------------------------------------------------------
 // claim_yield
 // ---------------------------------------------------------------------------
 

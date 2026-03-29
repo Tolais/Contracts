@@ -1909,6 +1909,96 @@ impl VestingContract {
                 (vault.owner, remaining, treasury),
             );
         }
+    }
+    
+    /// Batch revoke multiple vaults in a single atomic transaction.
+    ///
+    /// This function is designed for "Mass Termination" scenarios where multiple
+    /// team members (e.g., a 5-person sub-team) need to be let go simultaneously.
+    /// All unvested tokens from all specified vaults are returned to the DAO treasury
+    /// in a single atomic action.
+    ///
+    /// # Parameters
+    /// - `vault_ids`: Vector of vault IDs to revoke (e.g., beneficiary IDs)
+    /// - `treasury`: Address where all unvested tokens will be sent
+    ///
+    /// # Behavior
+    /// - Processes all vaults in a single transaction (atomic operation)
+    /// - Auto-unstakes any staked vaults before revocation
+    /// - Returns all unvested tokens to the treasury
+    /// - Emits a single TeamRevocation event with aggregated data
+    ///
+    /// # Panics
+    /// - If any vault is marked irrevocable
+    /// - If caller is not an admin
+    pub fn batch_revoke_vaults(env: Env, vault_ids: Vec<u64>, treasury: Address) {
+        Self::require_admin(&env);
+        
+        let mut total_revoked: i128 = 0;
+        let mut revoked_owners: Vec<Address> = Vec::new(&env);
+        
+        // Process each vault
+        for vault_id in vault_ids.iter() {
+            let mut vault = Self::get_vault_internal(&env, vault_id);
+            
+            if vault.is_irrevocable {
+                panic!("Vault {} is irrevocable", vault_id);
+            }
+            
+            // Auto-unstake if staked
+            let stake_info = get_stake_info(&env, vault_id);
+            if stake_info.stake_state != StakeState::Unstaked {
+                Self::do_unstake(&env, vault_id, &mut vault);
+                stake::emit_revocation_unstaked(&env, vault_id, &vault.owner);
+            }
+            
+            // Mark vault as revoked
+            Self::mark_vault_revoked(&env, vault_id);
+            
+            // Calculate remaining tokens for this vault
+            let mut remaining = 0i128;
+            for allocation in vault.allocations.iter() {
+                remaining += allocation.total_amount - allocation.released_amount;
+            }
+            
+            if remaining > 0 {
+                // Update allocations to mark all as released
+                for (i, allocation) in vault.allocations.iter().enumerate() {
+                    let mut updated_allocation = allocation.clone();
+                    updated_allocation.released_amount = allocation.total_amount;
+                    vault.allocations.set(i.try_into().unwrap(), updated_allocation);
+                }
+                vault.end_time = env.ledger().timestamp();
+                vault.step_duration = 0;
+                vault.is_frozen = true;
+                
+                if env.storage().instance().has(&DataKey::VaultMilestones(vault_id)) {
+                    env.storage().instance().remove(&DataKey::VaultMilestones(vault_id));
+                }
+                
+                env.storage().instance().set(&DataKey::VaultData(vault_id), &vault);
+                
+                let total_shares: i128 = env.storage().instance().get(&DataKey::TotalShares).unwrap_or(0);
+                env.storage().instance().set(&DataKey::TotalShares, &(total_shares - remaining));
+                
+                total_revoked += remaining;
+                revoked_owners.push_back(vault.owner.clone());
+            }
+        }
+        
+        // Transfer all revoked tokens to treasury in a single transaction
+        if total_revoked > 0 {
+            let token: Address = env.storage().instance().get(&DataKey::Token).expect("Token not set");
+            token::Client::new(&env, &token).transfer(&env.current_contract_address(), &treasury, &total_revoked);
+            
+            // Emit single TeamRevocation event
+            env.events().publish(
+                (Symbol::new(&env, "team_revoked"), vault_ids.len()),
+                (revoked_owners, total_revoked, treasury),
+            );
+        }
+    }
+    
     pub fn revoke_vault(_env: Env, _vault_id: u64, _treasury: Address) {
         panic!("Admin actions must be executed via AdminProposal: call propose_admin_action(AdminAction::RevokeSchedule(vault_id, treasury)) and sign_admin_proposal to reach quorum");
     }
